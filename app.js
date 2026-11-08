@@ -1,6 +1,7 @@
 
 "use strict";
 const API="https://nseyvrzfaqqhqbxovbmd.supabase.co", KEY="sb_publishable_1GSNX79G31T5OkafLHok3g_BFnAhg-5", APP=new URL("./",location.href).pathname;
+const PUBLIC_APP_URL="https://jirka83.github.io/agent-etikety-alergeny/";
 const ALL=[
 ["gluten","1. Obiloviny obsahující lepek"],["crustaceans","2. Korýši"],["eggs","3. Vejce"],
 ["fish","4. Ryby"],["peanuts","5. Arašídy"],["soy","6. Sója"],["milk","7. Mléko"],
@@ -10,6 +11,7 @@ let session=null,profile=null,found=[],selected=null,photo=null,working=false,sc
 const el=id=>document.getElementById(id);
 const escapeHtml=x=>String(x??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const urlSafe=x=>{try{const u=new URL(x);return ["https:","http:"].includes(u.protocol)?escapeHtml(u.href):""}catch{return ""}};
+const statusName=k=>({unverified:"Neověřeno",verified:"Ručně ověřeno",conflict:"Rozpor ve zdrojích"}[k]||"Neověřeno");
 const allergenName=k=>ALL.find(a=>a[0]===k)?.[1]||k;
 function msg(s,bad=false){el("alert").innerHTML='<p class="alert '+(bad?"error":"ok")+'" role="status">'+escapeHtml(s)+'</p>';setTimeout(()=>{if(el("alert"))el("alert").innerHTML=""},11000)}
 function show(html){stopScanner();el("app").innerHTML=html}
@@ -20,7 +22,7 @@ async function api(path,options={},requiresLogin=true){
  if(requiresLogin){await validSession();if(!session)throw Error("Je nutné přihlášení.");headers.Authorization="Bearer "+session.access_token}
  const res=await fetch(API+path,{...options,headers});
  const raw=await res.text();let data=null;try{data=JSON.parse(raw)}catch{data=raw}
- if(!res.ok){const e=Error(data?.message||data?.error_description||data?.error||"Chyba "+res.status);e.status=res.status;throw e}
+ if(!res.ok){const raw=data?.message||data?.msg||data?.error_description||data?.error||"Chyba "+res.status;const e=Error(res.status===429?"Služba dočasně omezila počet požadavků. U obnovy hesla použij nejnovější platný e-mail nebo zkus později.":raw==="Invalid login credentials"?"E-mail nebo heslo není správné.":raw);e.status=res.status;throw e}
  return data;
 }
 function store(s){session={...s,expires_at:s.expires_at||(Math.floor(Date.now()/1000)+Number(s.expires_in||3600))};localStorage.setItem("etikety_session",JSON.stringify(session))}
@@ -44,7 +46,7 @@ function login(){
  el("account").textContent="";
  show('<div class="card" style="max-width:450px;margin:30px auto"><h2>Přihlášení</h2><p class="muted">Použij svůj účet aplikace Etikety & Alergeny.</p><form id="authform"><label>E-mail<input type="email" id="mail" autocomplete="username" required></label><label>Heslo<input type="password" id="pass" autocomplete="current-password" required></label><div class="row"><button>Přihlásit</button><button type="button" id="reset" class="secondary">Zapomenuté heslo</button></div></form></div>');
  el("authform").onsubmit=async event=>{event.preventDefault();try{const s=await api("/auth/v1/token?grant_type=password",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({email:el("mail").value.trim(),password:el("pass").value})},false);store(s);if(await authenticate()){if(!recoveryPending())home()}}catch(e){fail(e)}};
- el("reset").onclick=async()=>{if(!el("mail").value.trim())return msg("Nejprve zadej e-mail.",true);try{await api("/auth/v1/recover?redirect_to="+encodeURIComponent(location.origin+APP),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({email:el("mail").value.trim()})},false);msg("Pokud účet existuje, pošleme e-mail. Adresa aplikace musí být povolena v Supabase Redirect URLs.")}catch(e){fail(e)}};
+ el("reset").onclick=async()=>{if(!el("mail").reportValidity())return;try{await api("/auth/v1/recover?redirect_to="+encodeURIComponent(PUBLIC_APP_URL),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({email:el("mail").value.trim()})},false);msg("Pokud účet existuje, přijde e-mail pro nastavení hesla. Otevři nejnovější zprávu; starší odkazy už nemusí platit.")}catch(e){fail(e)}};
 }
 async function resetPassword(){
  show('<div class="card" style="max-width:450px;margin:30px auto"><h2>Nastavit heslo</h2><form id="resetform"><label>Nové heslo (nejméně 12 znaků)<input id="newpass" type="password" minlength="12" required></label><button>Uložit nové heslo</button></form></div>');
@@ -203,7 +205,7 @@ async function exportCsv(){
    const findings=v?allergens.filter(a=>a.label_version_id===v.id):[];
    const contains=findings.filter(a=>a.finding_type==="contains").map(a=>allergenName(a.allergen_code)).join(", ")||"ÚDAJ NENALEZEN";
    const traces=findings.filter(a=>a.finding_type==="may_contain").map(a=>allergenName(a.allergen_code)).join(", ")||"ÚDAJ NENALEZEN — NEZNAMENÁ BEZ STOP";
-   rows.push([p.ean||"",p.name,p.brand||"",p.variant||"",contains,traces,v?.note||"",v?.verification_status||"Není etiketa",v?.created_at?new Date(v.created_at).toLocaleDateString("cs-CZ"):"",v?.source_url||v?.source||""]);
+   rows.push([p.ean||"",p.name,p.brand||"",p.variant||"",contains,traces,v?.note||"",v?statusName(v.verification_status):"Není etiketa",v?.created_at?new Date(v.created_at).toLocaleDateString("cs-CZ"):"",v?.source_url||v?.source||""]);
   }
   const cell=v=>{let t=String(v??"");if(/^[\s]*[=+\-@]/.test(t))t="'"+t;return '"'+t.replace(/"/g,'""')+'"'};
   const data="\uFEFF"+rows.map(row=>row.map(cell).join(";")).join("\r\n");
@@ -226,18 +228,18 @@ async function saved(focus){
   if(focus)await detail(focus);
  }catch(e){el("stored").innerHTML='<p class="alert error">'+escapeHtml(e.message)+'</p>'}
 }
-async function detail(id){
+async function detail(id,versionId=null){
  try{
   const [products,versions]=await Promise.all([
    api("/rest/v1/products?select=id,name,brand,variant,ean&id=eq."+encodeURIComponent(id)),
    api("/rest/v1/label_versions?select=*&product_id=eq."+encodeURIComponent(id)+"&order=created_at.desc")
   ]);
-  const p=products[0],v=versions[0];if(!p)throw Error("Výrobek neexistuje.");
+  const p=products[0],v=versionId?versions.find(x=>x.id===versionId):versions[0];if(versionId&&!v)throw Error("Tato verze etikety nebyla nalezena.");if(!p)throw Error("Výrobek neexistuje.");
   let finds=[];if(v)finds=await api("/rest/v1/allergen_findings?select=allergen_code,finding_type&label_version_id=eq."+encodeURIComponent(v.id));
   const state=Object.fromEntries(finds.map(f=>[f.allergen_code,f.finding_type]));
   let body='<div class="card"><h2>'+escapeHtml(p.name)+'</h2><p class="muted">'+escapeHtml([p.brand,p.variant,p.ean].filter(Boolean).join(" · "))+'</p><p>Počet verzí etiket: '+versions.length+'</p>';
   if(v){
-   body+='<p>Stav nejnovější verze: <b>'+escapeHtml(v.verification_status)+'</b> · '+escapeHtml(new Date(v.created_at).toLocaleString("cs-CZ"))+'</p><h3>Složení</h3><p style="white-space:pre-wrap">'+escapeHtml(v.ingredients||v.ingredients_text||"Údaj nenalezen")+'</p>'+
+   body+='<p>Stav zobrazené verze: <b>'+escapeHtml(statusName(v.verification_status))+'</b> · '+escapeHtml(new Date(v.created_at).toLocaleString("cs-CZ"))+'</p><h3>Složení</h3><p style="white-space:pre-wrap">'+escapeHtml(v.ingredients||v.ingredients_text||"Údaj nenalezen")+'</p>'+
    '<h3>Obsahuje</h3>'+(finds.some(f=>f.finding_type==="contains")?finds.filter(f=>f.finding_type==="contains").map(f=>'<span class="pill red">'+escapeHtml(allergenName(f.allergen_code))+'</span>').join(""):"<p>Údaj nenalezen – nezaručuje nepřítomnost alergenů.</p>")+
    '<h3>Možné stopy</h3>'+(finds.some(f=>f.finding_type==="may_contain")?finds.filter(f=>f.finding_type==="may_contain").map(f=>'<span class="pill gold">'+escapeHtml(allergenName(f.allergen_code))+'</span>').join(""):"<p>Údaj o stopách nenalezen – neznamená bez stop.</p>")+
    (v.note?'<p>Upozornění výrobce: '+escapeHtml(v.note)+'</p>':"")+
@@ -248,8 +250,8 @@ async function detail(id){
     if(s?.signedURL||s?.signedUrl){const link=s.signedURL||s.signedUrl;const full=link.startsWith("http")?link:API+"/storage/v1"+link;body+='<p><a href="'+urlSafe(full)+'" target="_blank" rel="noopener noreferrer">Otevřít fotografii konkrétní etikety</a></p>'}
    }
   }else body+='<p class="alert">Není zaznamenaná etiketa. Všechny alergeny a stopy jsou neověřené.</p>';
-  body+='<p><button id="new-version" class="secondary">Přidat novou etiketu</button></p></div><div class="card"><h3>Historie</h3>'+versions.map(v=>'<p>'+escapeHtml(new Date(v.created_at).toLocaleString("cs-CZ"))+' · '+escapeHtml(v.verification_status)+'</p>').join("")+'</div>';
-  chrome("Detail výrobku",body,"saved");
+  body+='<p><button id="new-version" class="secondary">Přidat novou etiketu</button></p></div><div class="card"><h3>Historie</h3>'+versions.map(v=>'<p>'+escapeHtml(new Date(v.created_at).toLocaleString("cs-CZ"))+' · '+escapeHtml(statusName(v.verification_status))+' <button class="secondary" data-history="'+escapeHtml(v.id)+'">Zobrazit verzi '+escapeHtml(v.version_no)+'</button></p>').join("")+'</div>';
+  chrome("Detail výrobku",body,"saved");document.querySelectorAll("[data-history]").forEach(b=>b.onclick=()=>detail(id,b.dataset.history));
   const newv=el("new-version");if(newv)newv.onclick=()=>{home();edit({productId:p.id,name:p.name,ean:p.ean||"",brand:p.brand||"",quantity:p.variant||"",ingredients:"",contains:[],possibleTraces:[],tracesText:"",sourceUrl:""});};
  }catch(e){fail(e)}
 }
