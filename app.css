@@ -25,5 +25,6 @@ nav button{background:#e2ece9;color:#19534e}nav button.active{background:#0b736d
 a{color:#086861}a:hover{text-decoration:none}
 @media(max-width:550px){.a{grid-template-columns:1fr}.row>input.grow{min-width:160px}}
 
+.capture-button{display:inline-flex;align-items:center;position:relative;min-height:44px;padding:0 16px;background:#e0eeeb;color:#165952;border-radius:9px;cursor:pointer;font-weight:bold}.capture-button:focus-within{outline:3px solid #956000;outline-offset:3px}
 :focus-visible{outline:3px solid #956000;outline-offset:3px}label{overflow-wrap:anywhere}input,textarea,select{max-width:100%}.card{overflow-wrap:anywhere}
 @media(max-width:350px){.grid{grid-template-columns:minmax(0,1fr)}.row>input.grow{min-width:0;width:100%;flex-basis:100%}}
