@@ -1,0 +1,29 @@
+
+*{box-sizing:border-box}body{margin:0;background:#f0f4f2;color:#19333e;font:16px/1.45 system-ui,-apple-system,sans-serif}
+header{background:#19323d;color:white;padding:20px 16px}header>div{max-width:1000px;margin:auto}
+main{max-width:1000px;margin:20px auto;padding:0 14px 50px}
+h1{font-size:1.35rem;margin:0}h2{font-size:1.2rem;margin:0 0 12px}h3{font-size:1rem;margin:8px 0}p{margin:9px 0}
+small,.muted{color:#597179}header small{color:#c5dad5}
+.card{background:white;border:1px solid #d8e4df;border-radius:14px;padding:17px;margin:12px 0;box-shadow:0 2px 8px #142b3210}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:12px}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.grow{flex:1}
+label{display:block;font-weight:600;margin:12px 0 5px}
+input,textarea,select{font:inherit;border:1px solid #b9c9c5;border-radius:9px;padding:11px;background:white;color:#1e3942;width:100%}
+input[type=checkbox]{width:auto;accent-color:#076d68}textarea{min-height:95px;resize:vertical}
+button{font:inherit;background:#0b736d;color:white;border:0;border-radius:9px;padding:11px 15px;min-height:45px;font-weight:650;cursor:pointer}
+button.secondary{background:#e2efec;color:#15514c}button:disabled{opacity:.55;cursor:wait}
+nav{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:14px}
+nav button{background:#e2ece9;color:#19534e}nav button.active{background:#0b736d;color:white}
+.alert{border-radius:10px;padding:12px;margin:9px 0;background:#fff4d8;color:#6e4c0b}
+.error{background:#fde7e7;color:#7c1d25}.ok{background:#ddf2e9;color:#166144}
+.pill{display:inline-block;border-radius:30px;padding:5px 9px;margin:3px;background:#eee;font-size:.82rem}
+.red{background:#ffdddd;color:#8e1d2c}.gold{background:#ffefc7;color:#714c00}.gray{background:#eef0f2;color:#41525a}
+.choice{border:1px solid #d6e4dd;padding:12px;border-radius:12px;margin:10px 0}
+.choice img{width:100%;max-height:210px;object-fit:contain;border-radius:8px}
+.a{display:grid;grid-template-columns:minmax(180px,1fr) minmax(180px,220px);align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid #e4edea}
+.sep{border-top:1px solid #e3eae7;margin:17px 0}
+a{color:#086861}a:hover{text-decoration:none}
+@media(max-width:550px){.a{grid-template-columns:1fr}.row>input.grow{min-width:160px}}
+
+:focus-visible{outline:3px solid #956000;outline-offset:3px}label{overflow-wrap:anywhere}input,textarea,select{max-width:100%}.card{overflow-wrap:anywhere}
+@media(max-width:350px){.grid{grid-template-columns:minmax(0,1fr)}.row>input.grow{min-width:0;width:100%;flex-basis:100%}}
