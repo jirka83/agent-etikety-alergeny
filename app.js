@@ -66,7 +66,7 @@ function chrome(title,body,tab="search"){
 function home(){
  selected=null;found=[];photo=null;pendingSave=null;
  chrome("Automaticky najít etiketu",
- '<div class="card"><label>Název výrobku nebo EAN</label><div class="row"><input id="lookup" class="grow" placeholder="Zadej značku a název nebo čárový kód" autofocus><button id="find">Najít etiketu</button><button id="scan" class="secondary">Skenovat EAN</button><button id="photo-ean" class="secondary">Vyfotit EAN</button><button id="manual" class="secondary">Zadat ručně</button></div><div id="camera"></div><div class="row" style="margin-top:12px"><label for="lookup-market">Trh</label><select id="lookup-market" style="width:auto;max-width:100%"><option value="all">Všechny zdroje</option><option value="CZ">Česká republika</option><option value="AT">Rakousko</option></select></div><p class="muted">Česká republika a Rakousko hledají v Open Food Facts podle země prodeje. Všechny zdroje zahrnují také vlastní etikety a USDA.</p></div>'+catalogHelp()+'<div id="results"></div><details class="card" id="czech-sources"><summary>České zdroje k ručnímu dohledání</summary><div id="czech-sources-links">'+czechCatalogLinks()+'</div></details><div id="editor"></div>');
+ '<div class="card"><label>Název výrobku nebo EAN</label><div class="row"><input id="lookup" class="grow" placeholder="Zadej značku a název nebo čárový kód" autofocus><button id="find">Najít etiketu</button><button id="scan" class="secondary">Skenovat EAN</button><button id="photo-ean" class="secondary">Vyfotit EAN</button><button id="manual" class="secondary">Zadat ručně</button></div><div id="camera"></div><div class="row" style="margin-top:12px"><label for="lookup-market">Trh</label><select id="lookup-market" style="width:auto;max-width:100%"><option value="all">Všechny zdroje</option><option value="CZ">Česká republika</option><option value="AT">Rakousko</option></select></div><p class="muted">Vlastní etikety hledáme vždy. Volba trhu omezuje výsledky z veřejných katalogů.</p></div>'+catalogHelp()+'<div id="results"></div><details class="card" id="czech-sources"><summary>České zdroje k ručnímu dohledání</summary><div id="czech-sources-links">'+czechCatalogLinks()+'</div></details><div id="editor"></div>');
  el("find").onclick=search;
  el("lookup").onkeydown=e=>{if(e.key==="Enter")search()};
  el("scan").onclick=startScanner;el("photo-ean").onclick=photographEan;
@@ -85,6 +85,9 @@ let catalogSearchId=0;
 const catalogTimeout=ms=>{if(typeof AbortSignal.timeout==="function")return AbortSignal.timeout(ms);const controller=new AbortController();setTimeout(()=>controller.abort(),ms);return controller.signal};
 const canonicalGTIN=code=>String(code).padStart(14,"0");
 const searchWords=text=>String(text||"").normalize("NFD").replace(/\p{M}/gu,"").toLowerCase().replace(/[^\p{L}\p{N}]+/gu," ").trim();
+const nutellaSpellings=["nutella","nuttela","nuttella","nutela"];
+const normalizeCatalogSpelling=text=>text.replace(/\b(?:nuttela|nuttella|nutela)\b/gi,"Nutella");
+const catalogMatchWords=text=>searchWords(text).replace(/(\d+)\s+g\b/g,"$1g").split(" ");
 function catalogTerm(input){
  const text=String(input||"").trim().replace(/\s+/g," "),digits=text.replace(/\s/g,"");
  if(text.length<3||text.length>100)throw Error("Zadej 3 až 100 znaků názvu nebo celý EAN.");
@@ -130,10 +133,15 @@ async function lookupSaved(query){
  }else{
   const words=query.term.replace(/[^\p{L}\p{N} ]/gu," ").trim().split(/\s+/).sort((a,b)=>b.length-a.length);
   if(!words[0])return [];
-  const atom=words[0];p.set("or","(name.ilike.*"+atom+"*,brand.ilike.*"+atom+"*)");
+  const atom=words[0],terms=atom.toLowerCase()==="nutella"?nutellaSpellings:[atom];
+  p.set("or","("+terms.flatMap(term=>["name.ilike.*"+term+"*","brand.ilike.*"+term+"*"]).join(",")+")");
  }
  const rows=await api("/rest/v1/products?"+p,{signal:catalogTimeout(10000)});
- return rows.filter(r=>query.exact?Boolean(r.ean)&&canonicalGTIN(r.ean)===canonicalGTIN(query.term):searchWords(query.term).split(" ").every(w=>searchWords(r.name+" "+(r.brand||"")).includes(w))).slice(0,6);
+ return rows.filter(r=>{
+  if(query.exact)return Boolean(r.ean)&&canonicalGTIN(r.ean)===canonicalGTIN(query.term);
+  const name=catalogMatchWords(normalizeCatalogSpelling([r.name,r.brand,r.variant].filter(Boolean).join(" "))).join(" ");
+  return catalogMatchWords(query.term).every(word=>name.includes(word));
+ }).slice(0,6);
 }
 function catalogLink(url,label){return '<a href="'+urlSafe(url)+'" target="_blank" rel="noopener noreferrer">'+escapeHtml(label)+'</a>'}
 const nutellaManufacturer="https://www.nutella.com/cz/cs/vyrobky/nutella";
@@ -152,7 +160,6 @@ function czechReferenceMatches(query){
    contains:["nuts","milk","soy"],containsDetail:"Lískové ořechy, mléko, sója (lecitiny)",possibleTraces:[],tracesText:"",
    sourceStatus:"czech_reference",sourceUrl:pack.sourceUrl,manufacturerUrl:nutellaManufacturer}));
 }
-function nutellaSearchWords(text){return searchWords(text).replace(/(\d+)\s+g\b/g,"$1g").split(" ")}
 function czechCatalogLinks(name=""){
  const term=encodeURIComponent(name);
  const rohlik=name?"https://www.rohlik.cz/hledat?q="+term+"&companyId=1":"https://www.rohlik.cz/";
@@ -187,7 +194,7 @@ function renderCatalogResults(query,states,target){
  const ongoing=Object.values(states).some(x=>x.state==="pending");
  const missing=Object.entries(states).filter(([,x])=>x.state==="failed").map(([k])=>({saved:"Uložené etikety",off:"Open Food Facts",usda:"USDA"}[k]));
  const referenceCodes=new Set(reference.rows.map(m=>canonicalGTIN(m.ean)));
- const queryWords=nutellaSearchWords(query.term);
+ const queryWords=catalogMatchWords(query.term);
  const nutellaByName=query.market!=="AT"&&!query.exact&&queryWords.includes("nutella");
  if(nutellaByName){
   // For these codes, show only the Czech cards matching the requested variant or weight.
@@ -196,7 +203,7 @@ function renderCatalogResults(query,states,target){
  const relevantPublicMatch=m=>{
   if(referenceCodes.has(canonicalGTIN(m.ean)))return false;
   if(!nutellaByName)return true;
-  const words=nutellaSearchWords([m.name,m.brand,m.quantity].join(" "));
+  const words=catalogMatchWords([m.name,m.brand,m.quantity].join(" "));
   return queryWords.every(word=>words.includes(word)||/^\d+$/.test(word)&&words.includes(word+"g"));
  };
  const offRows=off.rows.filter(relevantPublicMatch);
@@ -210,7 +217,7 @@ function renderCatalogResults(query,states,target){
   '<p><b>'+(m.manufacturerUrl?"Obsahuje podle českého zdroje:":"Obsahuje (neověřeno):")+'</b> '+(m.contains.length?escapeHtml(m.containsDetail||m.contains.map(allergenName).join(", ")):"Samostatný seznam není k dispozici. Zkontroluj složení.")+'</p>'+
   '<p><b>'+(m.manufacturerUrl?"Možné stopy:":"Možné stopy (neověřeno):")+'</b> '+(m.possibleTraces.length?escapeHtml(m.possibleTraces.map(allergenName).join(", ")):m.tracesText?"Viz upozornění výrobce níže.":m.manufacturerUrl?"Zdroj neuvádí samostatné upozornění. Zkontroluj obal.":"Údaj nenalezen – neznamená bez stop")+'</p>'+
   (m.tracesText?'<p>'+escapeHtml(m.tracesText)+'</p>':'')+
-  '<button type="button" data-choice="'+i+'">Vybrat neověřený návrh</button> '+catalogLink(m.sourceUrl,m.manufacturerUrl?"Česká karta s EAN":m.market?"Vyhledat EAN v USDA":"Karta Open Food Facts")+
+  '<button type="button" data-choice="'+i+'">Připravit k uložení</button> '+catalogLink(m.sourceUrl,m.manufacturerUrl?"Česká karta s EAN":m.market?"Vyhledat EAN v USDA":"Karta Open Food Facts")+
   (m.manufacturerUrl?' · '+catalogLink(m.manufacturerUrl,"Složení od výrobce"):'')+'</article>';
  target.innerHTML='<p role="status">'+(ongoing?(count?"Zatím nalezeno: "+count+". Ještě prohledávám další zdroje…":"Hledám v bezplatných katalozích…"):"Nalezené záznamy: "+count)+'</p>'+
   (missing.length?'<p class="alert">Nepodařilo se prohledat: '+escapeHtml(missing.join(", "))+'. Výsledky z dostupných zdrojů zůstávají zobrazené.</p>':'')+
@@ -242,13 +249,13 @@ async function lookupOpenFoodFacts(query){
 }
 async function search(){
  let query;try{query=catalogTerm(el("lookup").value)}catch(e){return fail(e)}
- if(!query.exact)query.term=query.term.replace(/\b(?:nuttela|nuttella|nutela)\b/gi,"Nutella");
+ if(!query.exact)query.term=normalizeCatalogSpelling(query.term);
  const b=el("find"),target=el("results"),request=++catalogSearchId;
  const market=el("lookup-market").value;
  if(market==="CZ"||market==="AT")query.market=market;
  stopScanner();b.disabled=true;el("editor").innerHTML="";el("archive-results").textContent="";el("catalog-links").innerHTML=additionalCatalogLinks(query.term);
  el("czech-sources-links").innerHTML=czechCatalogLinks(query.exact?"":query.term);
- const states=Object.fromEntries(["saved","off","usda"].map(k=>[k,{state:query.market&&k!=="off"?"skipped":"pending",rows:[]}]));
+ const states=Object.fromEntries(["saved","off","usda"].map(k=>[k,{state:query.market&&k==="usda"?"skipped":"pending",rows:[]}]));
  states.reference={state:"done",rows:czechReferenceMatches(query)};
  const current=()=>target.isConnected&&request===catalogSearchId;
  const render=()=>{if(current())renderCatalogResults(query,states,target)};
@@ -256,9 +263,8 @@ async function search(){
  render();
  try{
   await validSession();if(!session)throw Error("Přihlas se znovu.");if(!current())return;
-  const lookups=[run("off",()=>lookupOpenFoodFacts(query))];
+  const lookups=[run("off",()=>lookupOpenFoodFacts(query)),run("saved",()=>lookupSaved(query))];
   if(!query.market){
-   lookups.push(run("saved",()=>lookupSaved(query)));
    lookups.push(run("usda",async()=>catalogMatches(await loadCatalog("usda"),query).map(r=>usdaMatch(r,query))));
   }
   await Promise.all(lookups);
@@ -272,6 +278,7 @@ function edit(m){
  const hasLabel=Boolean(m?.labelImageUrl);
  const body='<div class="card"><h2>Kontrola a uložení etikety</h2>'+
  '<div class="alert">Návrh není ověřený. Před uložením zkontroluj přesný produkt, všechny alergeny a možná upozornění „může obsahovat“.</div>'+
+ '<p>Do seznamu se výrobek přidá po potvrzení kontroly a uložení.</p><button id="go-save" type="button" class="secondary">Přejít k uložení</button>'+
  '<div class="grid"><div><label>Název *</label><input id="name" value="'+escapeHtml(selected.name)+'"></div><div><label>EAN</label><input id="ean" value="'+escapeHtml(selected.ean)+'" inputmode="numeric"></div><div><label>Značka</label><input id="brand" value="'+escapeHtml(selected.brand)+'"></div><div><label>Varianta / gramáž</label><input id="qty" value="'+escapeHtml(selected.quantity)+'"></div></div>'+
  '<label>Fotografie tvého balení (pro ověření)</label><input id="photo" type="file" accept="image/jpeg,image/png,image/webp" capture="environment"><button id="ocr" type="button" class="secondary">Přečíst fotografii (OCR)</button><p id="ocrmsg" class="muted">OCR funguje lokálně a je pouze návrhem.</p>'+
  '<label>Složení (zkontroluj celý text)</label><textarea id="ingredients">'+escapeHtml(selected.ingredients)+'</textarea>'+
@@ -280,9 +287,10 @@ function edit(m){
  '<label>Stav údajů</label><select id="status"><option value="unverified">Neověřeno – doporučené</option><option value="verified">Ověřeno mnou podle fotografie mého balení</option><option value="conflict">Rozpor ve zdrojích</option></select></div>'+
  '<div class="card"><h2>Alergeny a možné stopy</h2><button id="suggest" class="secondary">Navrhnout z textu (nutná kontrola)</button><p class="muted">Každou skupinu ověř. „Neuvedeno“ neznamená „neobsahuje“.</p>'+
  ALL.map(([code,label])=>'<div class="a"><span>'+escapeHtml(label)+'</span><select data-code="'+code+'"><option value="unknown">Neuvedeno / neověřeno</option><option value="contains" '+(selected.contains.includes(code)?"selected":"")+'>Obsahuje</option><option value="both">Obsahuje i možné stopy</option><option value="may_contain" '+(!selected.contains.includes(code)&&selected.possibleTraces.includes(code)?"selected":"")+'>Možné stopy</option></select></div>').join("")+'</div>'+
- '<div class="card"><label><input id="confirmed" type="checkbox"> Potvrzuji, že jsem údaje porovnal(a) s konkrétním obalem nebo zdrojem. Ukládá se nová verze; staré záznamy zůstanou zachovány.</label><button id="save">Uložit výrobek a verzi etikety</button></div>';
+ '<div id="save-confirmation" class="card"><label><input id="confirmed" type="checkbox"> Potvrzuji, že jsem údaje porovnal(a) s konkrétním obalem nebo zdrojem. Ukládá se nová verze; staré záznamy zůstanou zachovány.</label><button id="save">Uložit do seznamu</button></div>';
  el("editor").innerHTML=body;document.querySelectorAll("[data-code]").forEach(s=>{if(selected.contains.includes(s.dataset.code)&&selected.possibleTraces.includes(s.dataset.code))s.value="both"});
  el("editor").scrollIntoView({behavior:"smooth",block:"start"});
+ el("go-save").onclick=()=>{el("save-confirmation").scrollIntoView({behavior:"smooth",block:"center"});el("confirmed").focus({preventScroll:true})};
  el("photo").onchange=e=>photo=e.target.files?.[0]||null;
  el("ocr").onclick=runOcr;
  el("suggest").onclick=suggest;
@@ -326,6 +334,7 @@ function collectFindings(){
 }
 async function completePendingSave(){
  const row=await api("/rest/v1/rpc/save_label_version",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(pendingSave)});
+ if(!row?.product_id)throw Error("Server nevrátil potvrzení uloženého výrobku.");
  sessionStorage.removeItem("etikety_pending_save");pendingSave=null;
  msg("Výrobek, etiketa i alergeny byly společně uloženy.");await saved(row.product_id);
 }
@@ -392,12 +401,20 @@ async function exportCsv(){
 async function saved(focus){
  chrome("Uložené výrobky",'<div class="row"><button id="export" class="secondary">Export do Excelu (CSV)</button></div><div id="stored" class="card">Načítání…</div>',"saved");
  el("export").onclick=exportCsv;
+ const stored=el("stored");
  try{
   const list=await api("/rest/v1/products?select=id,name,brand,ean,variant&order=name.asc&limit=500");
-  el("stored").innerHTML=list.length?list.map(p=>'<div class="choice"><b>'+escapeHtml(p.name)+'</b><p class="muted">'+escapeHtml([p.brand,p.variant,p.ean].filter(Boolean).join(" · "))+'</p><button data-p="'+escapeHtml(p.id)+'" class="secondary">Zobrazit alergeny a historii</button></div>').join(""):"Zatím nejsou uložené výrobky.";
-  document.querySelectorAll("[data-p]").forEach(b=>b.onclick=()=>detail(b.dataset.p));
-  if(focus)await detail(focus);
- }catch(e){el("stored").innerHTML='<p class="alert error">'+escapeHtml(e.message)+'</p>'}
+  if(focus){
+   const index=list.findIndex(p=>p.id===focus);
+   const latest=index>=0?list.splice(index,1)[0]:(await api("/rest/v1/products?select=id,name,brand,ean,variant&id=eq."+encodeURIComponent(focus)))[0];
+   if(!latest)throw Error("Uložení bylo potvrzeno, ale výrobek se v seznamu nepodařilo načíst. Otevři Uložené výrobky znovu.");
+   list.unshift(latest);
+  }
+  if(!stored.isConnected)return;
+  stored.innerHTML=list.length?list.map(p=>'<div class="choice">'+(p.id===focus?'<p class="ok alert">Právě uloženo do seznamu</p>':'')+'<b>'+escapeHtml(p.name)+'</b><p class="muted">'+escapeHtml([p.brand,p.variant,p.ean].filter(Boolean).join(" · "))+'</p><button data-p="'+escapeHtml(p.id)+'" class="secondary">Zobrazit alergeny a historii</button></div>').join(""):"Zatím nejsou uložené výrobky.";
+  stored.querySelectorAll("[data-p]").forEach(b=>b.onclick=()=>detail(b.dataset.p));
+  if(focus)stored.firstElementChild?.scrollIntoView({block:"nearest"});
+ }catch(e){if(stored.isConnected)stored.innerHTML='<p class="alert error">'+escapeHtml(e.message)+'</p>'}
 }
 async function detail(id,versionId=null){
  try{
