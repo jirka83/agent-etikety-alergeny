@@ -136,6 +136,22 @@ async function lookupSaved(query){
  return rows.filter(r=>query.exact?Boolean(r.ean)&&canonicalGTIN(r.ean)===canonicalGTIN(query.term):searchWords(query.term).split(" ").every(w=>searchWords(r.name+" "+(r.brand||"")).includes(w))).slice(0,6);
 }
 function catalogLink(url,label){return '<a href="'+urlSafe(url)+'" target="_blank" rel="noopener noreferrer">'+escapeHtml(label)+'</a>'}
+const nutellaManufacturer="https://www.nutella.com/cz/cs/vyrobky/nutella";
+const nutellaCzechPacks=[
+ {ean:"80135463",grams:"200",sourceUrl:"https://eshop.rojal.cz/nutella-200-g"},
+ {ean:"80177173",grams:"350",sourceUrl:"https://eshop.rojal.cz/nutella-350-g"},
+ {ean:"8000500179864",grams:"600",sourceUrl:"https://sdmikulov.e-coop.cz/rakvice/1000156444.html"}
+];
+function czechReferenceMatches(query){
+ if(query.market==="AT")return [];
+ const match=query.exact?null:/^(?:ferrero )?nutella(?: (?:original|klasicka))?(?: (\d+) ?g?)?(?: ferrero)?$/.exec(searchWords(query.term));
+ if(!query.exact&&!match)return [];
+ return nutellaCzechPacks.filter(pack=>query.exact?canonicalGTIN(pack.ean)===canonicalGTIN(query.term):!match[1]||pack.grams===match[1])
+  .map(pack=>({name:"Nutella",brand:"Ferrero",ean:pack.ean,quantity:pack.grams+" g",
+   ingredients:"Cukr, palmový olej, lískové ořechy (13 %), odtučněné sušené mléko (8,7 %), nízkotučný kakaový prášek (7,4 %), sójové lecitiny, vanilin.",
+   contains:["nuts","milk","soy"],containsDetail:"Lískové ořechy, mléko, sója (lecitiny)",possibleTraces:[],tracesText:"",
+   sourceStatus:"czech_reference",sourceUrl:pack.sourceUrl,manufacturerUrl:nutellaManufacturer}));
+}
 function czechCatalogLinks(name=""){
  const term=encodeURIComponent(name);
  const rohlik=name?"https://www.rohlik.cz/hledat?q="+term+"&companyId=1":"https://www.rohlik.cz/";
@@ -165,26 +181,35 @@ async function searchArchive(){
  }catch{if(target.isConnected&&request===catalogSearchId)target.textContent="Archiv se nepodařilo načíst. Zkus to znovu."}finally{b.disabled=false}
 }
 function renderCatalogResults(query,states,target){
- const {saved:own,off,usda}=states;
+ const {saved:own,off,usda,reference}=states;
  const marketName=query.market==="CZ"?"Česká republika":query.market==="AT"?"Rakousko":"";
  const ongoing=Object.values(states).some(x=>x.state==="pending");
  const missing=Object.entries(states).filter(([,x])=>x.state==="failed").map(([k])=>({saved:"Uložené etikety",off:"Open Food Facts",usda:"USDA"}[k]));
- found=[...off.rows,...usda.rows];
+ const referenceCodes=new Set(reference.rows.map(m=>canonicalGTIN(m.ean)));
+ if(query.market!=="AT"&&!query.exact&&searchWords(query.term).split(" ").includes("nutella")){
+  // For these codes, show only the Czech cards matching the requested variant or weight.
+  nutellaCzechPacks.forEach(pack=>referenceCodes.add(canonicalGTIN(pack.ean)));
+ }
+ const offRows=off.rows.filter(m=>!referenceCodes.has(canonicalGTIN(m.ean)));
+ const usdaRows=usda.rows.filter(m=>!referenceCodes.has(canonicalGTIN(m.ean)));
+ found=[...reference.rows,...offRows,...usdaRows];
  const count=own.rows.length+found.length;
  const card=(m,i)=>'<article class="card"><h3>'+escapeHtml(m.name)+'</h3><p class="muted">'+escapeHtml([m.brand,m.quantity,"EAN "+m.ean].filter(Boolean).join(" · "))+'</p>'+
   (m.market?'<p class="muted">Trh: '+escapeHtml(m.market)+' · export USDA '+escapeHtml(m.snapshot)+(m.updated?' · změna záznamu '+escapeHtml(m.updated):'')+' · FDC '+escapeHtml(m.fdcId)+'</p>':'')+
   (m.labelImageUrl&&urlSafe(m.labelImageUrl)?'<a href="'+urlSafe(m.labelImageUrl)+'" target="_blank" rel="noopener noreferrer"><img loading="lazy" src="'+urlSafe(m.labelImageUrl)+'" alt="Fotografie složení" style="width:100%;max-height:220px;object-fit:contain"></a>':'')+
   (m.ingredients?'<details><summary>Zobrazit složení</summary><p>'+escapeHtml(m.ingredients)+'</p></details>':'')+
-  '<p><b>Obsahuje (neověřeno):</b> '+(m.contains.length?escapeHtml(m.contains.map(allergenName).join(", ")):"Samostatný seznam není k dispozici. Zkontroluj složení.")+'</p>'+
-  '<p><b>Možné stopy (neověřeno):</b> '+(m.possibleTraces.length?escapeHtml(m.possibleTraces.map(allergenName).join(", ")):m.tracesText?"Viz upozornění výrobce níže.":"Údaj nenalezen – neznamená bez stop")+'</p>'+
+  '<p><b>'+(m.manufacturerUrl?"Obsahuje podle českého zdroje:":"Obsahuje (neověřeno):")+'</b> '+(m.contains.length?escapeHtml(m.containsDetail||m.contains.map(allergenName).join(", ")):"Samostatný seznam není k dispozici. Zkontroluj složení.")+'</p>'+
+  '<p><b>'+(m.manufacturerUrl?"Možné stopy:":"Možné stopy (neověřeno):")+'</b> '+(m.possibleTraces.length?escapeHtml(m.possibleTraces.map(allergenName).join(", ")):m.tracesText?"Viz upozornění výrobce níže.":m.manufacturerUrl?"Zdroj neuvádí samostatné upozornění. Zkontroluj obal.":"Údaj nenalezen – neznamená bez stop")+'</p>'+
   (m.tracesText?'<p>'+escapeHtml(m.tracesText)+'</p>':'')+
-  '<button type="button" data-choice="'+i+'">Vybrat neověřený návrh</button> '+catalogLink(m.sourceUrl,m.market?"Vyhledat EAN v USDA":"Karta Open Food Facts")+'</article>';
+  '<button type="button" data-choice="'+i+'">Vybrat neověřený návrh</button> '+catalogLink(m.sourceUrl,m.manufacturerUrl?"Česká karta s EAN":m.market?"Vyhledat EAN v USDA":"Karta Open Food Facts")+
+  (m.manufacturerUrl?' · '+catalogLink(m.manufacturerUrl,"Složení od výrobce"):'')+'</article>';
  target.innerHTML='<p role="status">'+(ongoing?(count?"Zatím nalezeno: "+count+". Ještě prohledávám další zdroje…":"Hledám v bezplatných katalozích…"):"Nalezené záznamy: "+count)+'</p>'+
   (missing.length?'<p class="alert">Nepodařilo se prohledat: '+escapeHtml(missing.join(", "))+'. Výsledky z dostupných zdrojů zůstávají zobrazené.</p>':'')+
   (own.rows.length?'<h3>Vaše uložené výrobky</h3>'+own.rows.map((r,i)=>'<div class="card"><b>'+escapeHtml(r.name)+'</b><p class="muted">'+escapeHtml([r.brand,r.variant,r.ean&&"EAN "+r.ean].filter(Boolean).join(" · "))+'</p><button type="button" data-own="'+i+'">Otevřít uloženou etiketu</button></div>').join(""):'')+
   (found.length?'<p class="muted">Výsledky jsou oddělené podle zdroje. Porovnej EAN, gramáž a složení se svým obalem.</p>':'')+
-  (off.rows.length?'<h3>'+(marketName?marketName+' · Open Food Facts':'Open Food Facts')+'</h3>'+off.rows.map(card).join(""):'')+
-  (usda.rows.length?'<h3>USDA FoodData Central</h3>'+usda.rows.map((m,i)=>card(m,off.rows.length+i)).join(""):'')+
+  (reference.rows.length?'<h3>České produktové karty</h3>'+reference.rows.map(card).join(""):'')+
+  (offRows.length?'<h3>'+(marketName?marketName+' · Open Food Facts':'Open Food Facts')+'</h3>'+offRows.map((m,i)=>card(m,reference.rows.length+i)).join(""):'')+
+  (usdaRows.length?'<h3>USDA FoodData Central</h3>'+usdaRows.map((m,i)=>card(m,reference.rows.length+offRows.length+i)).join(""):'')+
   (!ongoing&&!count?'<p class="card">'+(missing.length?"V dostupných zdrojích se výrobek nenašel.":marketName?"V katalogu se nenašel výrobek pro trh „"+marketName+"“.":"Výrobek v prohledaných katalozích nenalezen.")+' Použij fotografii nebo ruční zadání. '+catalogLink("https://www.google.com/search?q="+encodeURIComponent(query.term+" výrobce etiketa složení alergeny"),"Dohledat etiketu výrobce")+'</p>':'');
  target.querySelectorAll("[data-choice]").forEach(b=>{const item=found[Number(b.dataset.choice)];b.onclick=()=>edit(item)});
  target.querySelectorAll("[data-own]").forEach(b=>{const item=own.rows[Number(b.dataset.own)];b.onclick=()=>detail(item.id)});
@@ -208,12 +233,14 @@ async function lookupOpenFoodFacts(query){
 }
 async function search(){
  let query;try{query=catalogTerm(el("lookup").value)}catch(e){return fail(e)}
+ if(!query.exact)query.term=query.term.replace(/\b(?:nuttela|nuttella|nutela)\b/gi,"Nutella");
  const b=el("find"),target=el("results"),request=++catalogSearchId;
  const market=el("lookup-market").value;
  if(market==="CZ"||market==="AT")query.market=market;
  stopScanner();b.disabled=true;el("editor").innerHTML="";el("archive-results").textContent="";el("catalog-links").innerHTML=additionalCatalogLinks(query.term);
  el("czech-sources-links").innerHTML=czechCatalogLinks(query.exact?"":query.term);
  const states=Object.fromEntries(["saved","off","usda"].map(k=>[k,{state:query.market&&k!=="off"?"skipped":"pending",rows:[]}]));
+ states.reference={state:"done",rows:czechReferenceMatches(query)};
  const current=()=>target.isConnected&&request===catalogSearchId;
  const render=()=>{if(current())renderCatalogResults(query,states,target)};
  const run=async(k,fn)=>{try{states[k]={state:"done",rows:await fn()}}catch{states[k]={state:"failed",rows:[]}}render()};
