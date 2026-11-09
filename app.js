@@ -66,11 +66,16 @@ function chrome(title,body,tab="search"){
 function home(){
  selected=null;found=[];photo=null;pendingSave=null;
  chrome("Automaticky najít etiketu",
- '<div class="card"><label>Název výrobku nebo EAN</label><div class="row"><input id="lookup" class="grow" placeholder="Zadej značku a název nebo čárový kód" autofocus><button id="find">Najít etiketu</button><button id="scan" class="secondary">Skenovat EAN</button><button id="photo-ean" class="secondary">Vyfotit EAN</button><button id="manual" class="secondary">Zadat ručně</button></div><div id="camera"></div><p class="muted">Jedním hledáním prohledáš uložené etikety, Open Food Facts (ODbL) a výběr USDA FoodData Central (CC0).</p></div>'+catalogHelp()+'<div id="results"></div><div id="editor"></div>');
+ '<div class="card"><label>Název výrobku nebo EAN</label><div class="row"><input id="lookup" class="grow" placeholder="Zadej značku a název nebo čárový kód" autofocus><button id="find">Najít etiketu</button><button id="scan" class="secondary">Skenovat EAN</button><button id="photo-ean" class="secondary">Vyfotit EAN</button><button id="manual" class="secondary">Zadat ručně</button></div><div id="camera"></div><div class="row" style="margin-top:12px"><label for="lookup-market">Trh</label><select id="lookup-market" style="width:auto;max-width:100%"><option value="all">Všechny zdroje</option><option value="AT">Rakousko</option></select></div><p class="muted">Jedním hledáním prohledáš uložené etikety, Open Food Facts (ODbL) a výběr USDA FoodData Central (CC0).</p></div>'+catalogHelp()+'<div id="results"></div><div id="editor"></div>');
  el("find").onclick=search;
  el("lookup").onkeydown=e=>{if(e.key==="Enter")search()};
  el("scan").onclick=startScanner;el("photo-ean").onclick=photographEan;
  el("manual").onclick=()=>edit(null);el("archive-search").onclick=searchArchive;
+ el("lookup-market").onchange=()=>{
+  catalogSearchId++;
+  el("results").textContent="";
+  el("find").disabled=false;
+ };
 }
 const catalogFiles={usda:"usda-2026-10.json",archive:"foodrepo-2018.json"};
 const catalogLoads=new Map();
@@ -130,7 +135,7 @@ async function lookupSaved(query){
 }
 function catalogLink(url,label){return '<a href="'+urlSafe(url)+'" target="_blank" rel="noopener noreferrer">'+escapeHtml(label)+'</a>'}
 function additionalCatalogLinks(term=""){
- return '<ul><li>'+catalogLink(usdaSearchUrl(term),"Celý katalog USDA")+' – značkové výrobky hlavně z USA a Nového Zélandu.</li><li>'+catalogLink("https://www.ferpotravina.cz/databaze-potravin","FÉR potravina")+' – české etikety k ručnímu dohledání.</li><li>'+catalogLink("https://www.gs1cz.org/standardy-sluzby/nastroje/verified-by-gs1/","Verified by GS1")+' – ověření identity EAN, nikoli složení.</li>'+(term?'<li>'+catalogLink("https://www.google.com/search?q="+encodeURIComponent(term+" výrobce etiketa složení alergeny"),"Vyhledat etiketu výrobce")+' – ověř variantu a EAN přímo na dokumentu.</li>':'')+'</ul>';
+ return '<ul><li>'+catalogLink(usdaSearchUrl(term),"Celý katalog USDA")+' – značkové výrobky hlavně z USA a Nového Zélandu.</li><li>'+catalogLink("https://www.ferpotravina.cz/databaze-potravin","FÉR potravina")+' – české etikety k ručnímu dohledání.</li><li>'+catalogLink("https://www.gs1cz.org/standardy-sluzby/nastroje/verified-by-gs1/","Verified by GS1")+' – ověření identity EAN, nikoli složení.</li>'+(term?'<li>'+catalogLink("https://www.google.com/search?q="+encodeURIComponent(term+" výrobce etiketa složení alergeny"),"Vyhledat etiketu výrobce")+' – ověř variantu a EAN přímo na dokumentu.</li>':'')+ '<li>Rakouské produktové katalogy: '+catalogLink("https://shop.billa.at/","BILLA")+' a '+catalogLink("https://www.spar.at/produktwelt","SPAR")+'.</li></ul>';
 }
 function catalogHelp(){
  return '<details class="card"><summary>Další bezplatné zdroje</summary><div id="catalog-links">'+additionalCatalogLinks()+'</div><p class="muted">FoodRepo – švýcarský archiv z roku 2018. Historické složení je pouze k porovnání; z archivu se etiketa nepředvyplňuje.</p><button type="button" id="archive-search" class="secondary">Prohledat archiv FoodRepo</button><div id="archive-results" aria-live="polite"></div></details>';
@@ -145,6 +150,7 @@ async function searchArchive(){
 }
 function renderCatalogResults(query,states,target){
  const {saved:own,off,usda}=states;
+ const austria=query.market==="AT";
  const ongoing=Object.values(states).some(x=>x.state==="pending");
  const missing=Object.entries(states).filter(([,x])=>x.state==="failed").map(([k])=>({saved:"Uložené etikety",off:"Open Food Facts",usda:"USDA"}[k]));
  found=[...off.rows,...usda.rows];
@@ -161,28 +167,48 @@ function renderCatalogResults(query,states,target){
   (missing.length?'<p class="alert">Nepodařilo se prohledat: '+escapeHtml(missing.join(", "))+'. Výsledky z dostupných zdrojů zůstávají zobrazené.</p>':'')+
   (own.rows.length?'<h3>Vaše uložené výrobky</h3>'+own.rows.map((r,i)=>'<div class="card"><b>'+escapeHtml(r.name)+'</b><p class="muted">'+escapeHtml([r.brand,r.variant,r.ean&&"EAN "+r.ean].filter(Boolean).join(" · "))+'</p><button type="button" data-own="'+i+'">Otevřít uloženou etiketu</button></div>').join(""):'')+
   (found.length?'<p class="muted">Výsledky jsou oddělené podle zdroje. Porovnej EAN, gramáž a složení se svým obalem.</p>':'')+
-  (off.rows.length?'<h3>Open Food Facts</h3>'+off.rows.map(card).join(""):'')+
+  (off.rows.length?'<h3>'+(austria?'Rakousko · Open Food Facts':'Open Food Facts')+'</h3>'+off.rows.map(card).join(""):'')+
   (usda.rows.length?'<h3>USDA FoodData Central</h3>'+usda.rows.map((m,i)=>card(m,off.rows.length+i)).join(""):'')+
-  (!ongoing&&!count?'<p class="card">'+(missing.length?"V dostupných zdrojích se výrobek nenašel.":"Výrobek v prohledaných katalozích nenalezen.")+' Použij fotografii nebo ruční zadání. '+catalogLink("https://www.google.com/search?q="+encodeURIComponent(query.term+" výrobce etiketa složení alergeny"),"Dohledat etiketu výrobce")+'</p>':'');
+  (!ongoing&&!count?'<p class="card">'+(missing.length?"V dostupných zdrojích se výrobek nenašel.":austria?"Pro tento dotaz nebyl v katalogu nalezen výrobek s uvedeným prodejem v Rakousku.":"Výrobek v prohledaných katalozích nenalezen.")+' Použij fotografii nebo ruční zadání. '+catalogLink("https://www.google.com/search?q="+encodeURIComponent(query.term+" výrobce etiketa složení alergeny"),"Dohledat etiketu výrobce")+'</p>':'');
  target.querySelectorAll("[data-choice]").forEach(b=>{const item=found[Number(b.dataset.choice)];b.onclick=()=>edit(item)});
  target.querySelectorAll("[data-own]").forEach(b=>{const item=own.rows[Number(b.dataset.own)];b.onclick=()=>detail(item.id)});
+}
+async function lookupOpenFoodFacts(query){
+ try{
+  const result=await api("/functions/v1/etikety-lookup",{
+   method:"POST",
+   headers:{"Content-Type":"application/json"},
+   body:JSON.stringify({term:query.term,market:query.market}),
+   signal:catalogTimeout(19000)
+  });
+  if(!Array.isArray(result.matches)||query.market==="AT"&&result.market!=="AT"){
+   throw Error("Katalog nevrátil výsledky pro vybraný trh.");
+  }
+  return result.matches;
+ }catch(error){
+  if(query.exact&&error.status===502&&error.message==="Katalog je nedostupný: 404")return [];
+  throw error;
+ }
 }
 async function search(){
  let query;try{query=catalogTerm(el("lookup").value)}catch(e){return fail(e)}
  const b=el("find"),target=el("results"),request=++catalogSearchId;
+ const austria=el("lookup-market").value==="AT";
+ if(austria)query.market="AT";
  stopScanner();b.disabled=true;el("editor").innerHTML="";el("archive-results").textContent="";el("catalog-links").innerHTML=additionalCatalogLinks(query.term);
- const states=Object.fromEntries(["saved","off","usda"].map(k=>[k,{state:"pending",rows:[]}]));
+ const states=Object.fromEntries(["saved","off","usda"].map(k=>[k,{state:austria&&k!=="off"?"skipped":"pending",rows:[]}]));
  const current=()=>target.isConnected&&request===catalogSearchId;
  const render=()=>{if(current())renderCatalogResults(query,states,target)};
  const run=async(k,fn)=>{try{states[k]={state:"done",rows:await fn()}}catch{states[k]={state:"failed",rows:[]}}render()};
  render();
  try{
   await validSession();if(!session)throw Error("Přihlas se znovu.");if(!current())return;
-  await Promise.all([
-   run("saved",()=>lookupSaved(query)),
-   run("off",async()=>{try{const j=await api("/functions/v1/etikety-lookup",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({term:query.term}),signal:catalogTimeout(19000)});if(!Array.isArray(j.matches))throw Error("Katalog nevrátil výsledky.");return j.matches}catch(e){if(query.exact&&e.status===502&&e.message==="Katalog je nedostupný: 404")return [];throw e}}),
-   run("usda",async()=>catalogMatches(await loadCatalog("usda"),query).map(r=>usdaMatch(r,query)))
-  ]);
+  const lookups=[run("off",()=>lookupOpenFoodFacts(query))];
+  if(!austria){
+   lookups.push(run("saved",()=>lookupSaved(query)));
+   lookups.push(run("usda",async()=>catalogMatches(await loadCatalog("usda"),query).map(r=>usdaMatch(r,query))));
+  }
+  await Promise.all(lookups);
  }catch(e){if(current())target.textContent=e.message}finally{if(current())b.disabled=false}
 }
 
