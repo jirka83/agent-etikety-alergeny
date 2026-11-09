@@ -66,7 +66,7 @@ function chrome(title,body,tab="search"){
 function home(){
  selected=null;found=[];photo=null;pendingSave=null;
  chrome("Automaticky najít etiketu",
- '<div class="card"><label>Název výrobku nebo EAN</label><div class="row"><input id="lookup" class="grow" placeholder="Zadej značku a název nebo čárový kód" autofocus><button id="find">Najít etiketu</button><button id="scan" class="secondary">Skenovat EAN</button><button id="photo-ean" class="secondary">Vyfotit EAN</button><button id="manual" class="secondary">Zadat ručně</button></div><div id="camera"></div><div class="row" style="margin-top:12px"><label for="lookup-market">Trh</label><select id="lookup-market" style="width:auto;max-width:100%"><option value="all">Všechny zdroje</option><option value="CZ">Česká republika</option><option value="AT">Rakousko</option></select></div><p class="muted">Česká republika a Rakousko hledají v Open Food Facts podle země prodeje. Všechny zdroje zahrnují také vlastní etikety a USDA.</p></div>'+catalogHelp()+'<div id="results"></div><div id="editor"></div>');
+ '<div class="card"><label>Název výrobku nebo EAN</label><div class="row"><input id="lookup" class="grow" placeholder="Zadej značku a název nebo čárový kód" autofocus><button id="find">Najít etiketu</button><button id="scan" class="secondary">Skenovat EAN</button><button id="photo-ean" class="secondary">Vyfotit EAN</button><button id="manual" class="secondary">Zadat ručně</button></div><div id="camera"></div><div class="row" style="margin-top:12px"><label for="lookup-market">Trh</label><select id="lookup-market" style="width:auto;max-width:100%"><option value="all">Všechny zdroje</option><option value="CZ">Česká republika</option><option value="AT">Rakousko</option></select></div><p class="muted">Česká republika a Rakousko hledají v Open Food Facts podle země prodeje. Všechny zdroje zahrnují také vlastní etikety a USDA.</p></div>'+catalogHelp()+'<div id="results"></div><details class="card" id="czech-sources"><summary>České zdroje k ručnímu dohledání</summary><div id="czech-sources-links">'+czechCatalogLinks()+'</div></details><div id="editor"></div>');
  el("find").onclick=search;
  el("lookup").onkeydown=e=>{if(e.key==="Enter")search()};
  el("scan").onclick=startScanner;el("photo-ean").onclick=photographEan;
@@ -74,6 +74,8 @@ function home(){
  el("lookup-market").onchange=()=>{
   catalogSearchId++;
   el("results").textContent="";
+  el("czech-sources").open=el("lookup-market").value==="CZ";
+  el("czech-sources-links").innerHTML=czechCatalogLinks();
   el("find").disabled=false;
  };
 }
@@ -134,8 +136,22 @@ async function lookupSaved(query){
  return rows.filter(r=>query.exact?Boolean(r.ean)&&canonicalGTIN(r.ean)===canonicalGTIN(query.term):searchWords(query.term).split(" ").every(w=>searchWords(r.name+" "+(r.brand||"")).includes(w))).slice(0,6);
 }
 function catalogLink(url,label){return '<a href="'+urlSafe(url)+'" target="_blank" rel="noopener noreferrer">'+escapeHtml(label)+'</a>'}
+function czechCatalogLinks(name=""){
+ const term=encodeURIComponent(name);
+ const rohlik=name?"https://www.rohlik.cz/hledat?q="+term+"&companyId=1":"https://www.rohlik.cz/";
+ const kosik=name?"https://www.kosik.cz/vyhledavani?search="+term:"https://www.kosik.cz/";
+ const tesco=name?"https://nakup.itesco.cz/shop/cs-CZ/search?query="+term+"&inputType=free+text":"https://nakup.itesco.cz/shop/cs-CZ/";
+ const glutenFree=name?"https://www.potravinybezlepku.cz/?page=vyhledavani&search="+term:"https://www.potravinybezlepku.cz/seznam-potravin/";
+ const inspection=name?"https://www.potravinynapranyri.cz/XSearch.aspx?stext="+term:"https://www.potravinynapranyri.cz/";
+ return '<p class="muted">Odkazy otevřou veřejné katalogy. Údaje z nich porovnej s etiketou svého balení.</p><ul><li>'+
+  catalogLink("https://www.ferpotravina.cz/h","FÉR potravina")+' – hledání podle názvu nebo EAN.</li><li>'+
+  catalogLink(glutenFree,"Potraviny bez lepku")+' – složení vybraných výrobků.</li><li>'+
+  [catalogLink(rohlik,"Rohlík"),catalogLink(kosik,"Košík"),catalogLink(tesco,"Tesco")].join(' · ')+
+  ' – produktové karty se složením a údaji o alergenech.</li></ul><p>'+
+  catalogLink(inspection,"Potraviny na pranýři (SZPI)")+' – upozornění inspekce ke konkrétním výrobkům a šaržím.</p>';
+}
 function additionalCatalogLinks(term=""){
- return '<ul><li>'+catalogLink(usdaSearchUrl(term),"Celý katalog USDA")+' – značkové výrobky hlavně z USA a Nového Zélandu.</li><li>'+catalogLink("https://www.ferpotravina.cz/databaze-potravin","FÉR potravina")+' – české etikety k ručnímu dohledání.</li><li>'+catalogLink("https://www.gs1cz.org/standardy-sluzby/nastroje/verified-by-gs1/","Verified by GS1")+' – ověření identity EAN, nikoli složení.</li>'+(term?'<li>'+catalogLink("https://www.google.com/search?q="+encodeURIComponent(term+" výrobce etiketa složení alergeny"),"Vyhledat etiketu výrobce")+' – ověř variantu a EAN přímo na dokumentu.</li>':'')+ '<li>Rakouské produktové katalogy: '+catalogLink("https://shop.billa.at/","BILLA")+' a '+catalogLink("https://www.spar.at/produktwelt","SPAR")+'.</li></ul>';
+ return '<ul><li>'+catalogLink(usdaSearchUrl(term),"Celý katalog USDA")+' – značkové výrobky hlavně z USA a Nového Zélandu.</li><li>'+catalogLink("https://www.gs1cz.org/standardy-sluzby/nastroje/verified-by-gs1/","Verified by GS1")+' – ověření identity EAN, nikoli složení.</li>'+(term?'<li>'+catalogLink("https://www.google.com/search?q="+encodeURIComponent(term+" výrobce etiketa složení alergeny"),"Vyhledat etiketu výrobce")+' – ověř variantu a EAN přímo na dokumentu.</li>':'')+ '<li>Rakouské produktové katalogy: '+catalogLink("https://shop.billa.at/","BILLA")+' a '+catalogLink("https://www.spar.at/produktwelt","SPAR")+'.</li></ul>';
 }
 function catalogHelp(){
  return '<details class="card"><summary>Další bezplatné zdroje</summary><div id="catalog-links">'+additionalCatalogLinks()+'</div><p class="muted">FoodRepo – švýcarský archiv z roku 2018. Historické složení je pouze k porovnání; z archivu se etiketa nepředvyplňuje.</p><button type="button" id="archive-search" class="secondary">Prohledat archiv FoodRepo</button><div id="archive-results" aria-live="polite"></div></details>';
@@ -163,7 +179,6 @@ function renderCatalogResults(query,states,target){
   '<p><b>Možné stopy (neověřeno):</b> '+(m.possibleTraces.length?escapeHtml(m.possibleTraces.map(allergenName).join(", ")):m.tracesText?"Viz upozornění výrobce níže.":"Údaj nenalezen – neznamená bez stop")+'</p>'+
   (m.tracesText?'<p>'+escapeHtml(m.tracesText)+'</p>':'')+
   '<button type="button" data-choice="'+i+'">Vybrat neověřený návrh</button> '+catalogLink(m.sourceUrl,m.market?"Vyhledat EAN v USDA":"Karta Open Food Facts")+'</article>';
- const czechFallback=query.market==="CZ"?'<p>'+catalogLink("https://www.ferpotravina.cz/databaze-potravin","Dohledat název nebo EAN v databázi FÉR potravina")+'</p>':'';
  target.innerHTML='<p role="status">'+(ongoing?(count?"Zatím nalezeno: "+count+". Ještě prohledávám další zdroje…":"Hledám v bezplatných katalozích…"):"Nalezené záznamy: "+count)+'</p>'+
   (missing.length?'<p class="alert">Nepodařilo se prohledat: '+escapeHtml(missing.join(", "))+'. Výsledky z dostupných zdrojů zůstávají zobrazené.</p>':'')+
   (own.rows.length?'<h3>Vaše uložené výrobky</h3>'+own.rows.map((r,i)=>'<div class="card"><b>'+escapeHtml(r.name)+'</b><p class="muted">'+escapeHtml([r.brand,r.variant,r.ean&&"EAN "+r.ean].filter(Boolean).join(" · "))+'</p><button type="button" data-own="'+i+'">Otevřít uloženou etiketu</button></div>').join(""):'')+
@@ -171,7 +186,6 @@ function renderCatalogResults(query,states,target){
   (off.rows.length?'<h3>'+(marketName?marketName+' · Open Food Facts':'Open Food Facts')+'</h3>'+off.rows.map(card).join(""):'')+
   (usda.rows.length?'<h3>USDA FoodData Central</h3>'+usda.rows.map((m,i)=>card(m,off.rows.length+i)).join(""):'')+
   (!ongoing&&!count?'<p class="card">'+(missing.length?"V dostupných zdrojích se výrobek nenašel.":marketName?"V katalogu se nenašel výrobek pro trh „"+marketName+"“.":"Výrobek v prohledaných katalozích nenalezen.")+' Použij fotografii nebo ruční zadání. '+catalogLink("https://www.google.com/search?q="+encodeURIComponent(query.term+" výrobce etiketa složení alergeny"),"Dohledat etiketu výrobce")+'</p>':'');
- if(czechFallback)target.insertAdjacentHTML("beforeend",czechFallback);
  target.querySelectorAll("[data-choice]").forEach(b=>{const item=found[Number(b.dataset.choice)];b.onclick=()=>edit(item)});
  target.querySelectorAll("[data-own]").forEach(b=>{const item=own.rows[Number(b.dataset.own)];b.onclick=()=>detail(item.id)});
 }
@@ -198,6 +212,7 @@ async function search(){
  const market=el("lookup-market").value;
  if(market==="CZ"||market==="AT")query.market=market;
  stopScanner();b.disabled=true;el("editor").innerHTML="";el("archive-results").textContent="";el("catalog-links").innerHTML=additionalCatalogLinks(query.term);
+ el("czech-sources-links").innerHTML=czechCatalogLinks(query.exact?"":query.term);
  const states=Object.fromEntries(["saved","off","usda"].map(k=>[k,{state:query.market&&k!=="off"?"skipped":"pending",rows:[]}]));
  const current=()=>target.isConnected&&request===catalogSearchId;
  const render=()=>{if(current())renderCatalogResults(query,states,target)};
@@ -211,6 +226,7 @@ async function search(){
    lookups.push(run("usda",async()=>catalogMatches(await loadCatalog("usda"),query).map(r=>usdaMatch(r,query))));
   }
   await Promise.all(lookups);
+  if(current()&&query.market!=="AT"&&Object.values(states).every(x=>!x.rows.length))el("czech-sources").open=true;
  }catch(e){if(current())target.textContent=e.message}finally{if(current())b.disabled=false}
 }
 
