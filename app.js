@@ -70,7 +70,7 @@ function home(){
  el("find").onclick=search;
  el("lookup").onkeydown=e=>{if(e.key==="Enter")search()};
  el("scan").onclick=startScanner;el("photo-ean").onclick=photographEan;
- el("manual").onclick=()=>edit(null);el("archive-search").onclick=searchArchive;
+ el("manual").onclick=()=>{stopScanner();edit(null)};el("archive-search").onclick=searchArchive;
  el("lookup-market").onchange=()=>{
   catalogSearchId++;
   el("results").textContent="";
@@ -401,69 +401,134 @@ function barcodeLibrary(){
  return barcodeLibraryPromise;
 }
 function releaseCamera(state){
- state.liveCancelled=true;clearInterval(state.timer);state.controls?.stop();state.controls=null;
+ state.liveCancelled=true;clearInterval(state.timer);state.timer=null;
  state.stream?.getTracks().forEach(t=>t.stop());state.stream=null;
- if(state.video)state.video.srcObject=null;
+ state.video.srcObject=null;state.preview.hidden=true;state.light.hidden=true;
 }
 function stopScanner(){
  const state=scanner;scanner=null;if(!state)return;
  releaseCamera(state);if(state.holder.isConnected)state.holder.innerHTML="";
 }
 function scannerMessage(state,text){if(scanner===state&&state.status.isConnected)state.status.textContent=text}
+function retailBarcode(raw){
+ const code=String(raw||"").trim();return code&&!/^0+$/.test(code)&&validEan(code)?code:"";
+}
 function acceptBarcode(state,raw){
- const code=String(raw||"").trim();if(!state||scanner!==state||!code||!validEan(code))return false;
+ const code=retailBarcode(raw);if(!state||scanner!==state||!code)return false;
  const input=el("lookup");if(!input)return false;
  input.value=code;stopScanner();search();return true;
 }
 function scannerPanel(){
  stopScanner();const holder=el("camera");if(!holder)return null;
- holder.innerHTML='<p id="scan-status" role="status">Namiř fotoaparát na celý čárový kód při dobrém světle.</p><video id="cam" autoplay playsinline muted style="width:100%;max-width:480px"></video><div class="row"><label class="capture-button" for="ean-photo">Vyfotit EAN<input id="ean-photo" type="file" accept="image/*" capture="environment" style="position:absolute;width:1px;height:1px;opacity:0"></label><button id="stop" type="button" class="secondary">Zavřít kameru</button></div><p class="muted">Fotografii kódu čteme pouze v tomto zařízení. Lze také zadat EAN ručně.</p>';
- const state={holder,video:el("cam"),status:el("scan-status"),stream:null,controls:null,timer:null};scanner=state;
+ holder.innerHTML='<p id="scan-status" role="status">Připravuji fotoaparát…</p>'+
+  '<div id="scan-preview" hidden style="position:relative;max-width:480px;margin:0 auto 10px"><video id="cam" autoplay playsinline muted style="display:block;width:100%;border-radius:10px"></video><div aria-hidden="true" style="position:absolute;inset:32% 4%;border:2px solid #b5ffbf;border-radius:10px;box-shadow:0 0 0 1px #19333e;pointer-events:none"></div></div>'+
+  '<div class="row"><button id="take-ean-photo" type="button" class="secondary">Vyfotit EAN</button><button id="pick-ean-photo" type="button" class="secondary">Vybrat fotku</button><button id="scan-light" type="button" class="secondary" aria-pressed="false" hidden>Světlo</button><button id="stop" type="button" class="secondary">Zavřít kameru</button></div>'+
+  '<input id="ean-photo" type="file" accept="image/*" capture="environment" hidden><input id="ean-gallery" type="file" accept="image/*" hidden><p class="muted">Fotografii kódu čteme pouze v tomto zařízení.</p>';
+ const state={holder,video:el("cam"),preview:el("scan-preview"),light:el("scan-light"),status:el("scan-status"),stream:null,timer:null,photoJob:0};scanner=state;
  state.video.muted=true;state.video.playsInline=true;
  el("stop").onclick=stopScanner;
- el("ean-photo").onchange=e=>{const file=e.target.files?.[0];if(file)scanBarcodePhoto(state,file);e.target.value=""};
+ el("take-ean-photo").onclick=()=>openBarcodePhoto(state,"ean-photo");
+ el("pick-ean-photo").onclick=()=>openBarcodePhoto(state,"ean-gallery");
+ for(const id of ["ean-photo","ean-gallery"])el(id).onchange=e=>{const file=e.target.files?.[0];if(file)scanBarcodePhoto(state,file);e.target.value=""};
  return state;
 }
+function openBarcodePhoto(state,id){
+ releaseCamera(state);state.photoJob++;
+ scannerMessage(state,id==="ean-photo"?"Vyfoť celý čárový kód včetně světlého okraje.":"Vyber fotku s celým čárovým kódem.");
+ el(id).click();
+}
+function photographEan(){const state=scannerPanel();if(state)openBarcodePhoto(state,"ean-photo")}
+const fullBarcodeFrame=[0,0,1,1];
+const centerBarcodeFrame=[.04,.32,.92,.36]; // Matches the guide over the video.
+function drawBarcodeFrame(canvas,source,width,height,region,limit,sideways=false){
+ const [left,top,spanX,spanY]=region;
+ const w=Math.round(width*spanX),h=Math.round(height*spanY),scale=Math.min(1,limit/Math.max(w,h));
+ const outW=Math.max(1,Math.round(w*scale)),outH=Math.max(1,Math.round(h*scale));
+ canvas.width=sideways?outH:outW;canvas.height=sideways?outW:outH;
+ const ctx=canvas.getContext("2d",{willReadFrequently:true});
+ if(sideways){ctx.translate(outH,0);ctx.rotate(Math.PI/2)}
+ ctx.drawImage(source,Math.round(width*left),Math.round(height*top),w,h,0,0,outW,outH);
+}
+function retailReader(library){
+ const {EAN_13,EAN_8,UPC_A,ITF}=library.BarcodeFormat;
+ const reader=new library.BrowserMultiFormatReader(new Map());
+ reader.possibleFormats=[EAN_13,EAN_8,UPC_A,ITF];return reader;
+}
+function readBarcodeCanvas(reader,canvas){
+ try{return retailBarcode(reader.decodeFromCanvas(canvas).getText())}catch{return ""}
+}
+function readBarcodePhoto(reader,image){
+ const canvas=document.createElement("canvas");
+ // Overlapping sections preserve detail for small codes near the edge of the photo.
+ const regions=[fullBarcodeFrame,[0,0,.65,.65],[.35,0,.65,.65],[0,.35,.65,.65],[.35,.35,.65,.65]];
+ for(const region of regions)for(const sideways of [false,true]){
+  drawBarcodeFrame(canvas,image,image.naturalWidth,image.naturalHeight,region,1600,sideways);
+  const code=readBarcodeCanvas(reader,canvas);if(code)return code;
+ }
+ return "";
+}
 async function scanBarcodePhoto(state,file){
- releaseCamera(state);state.video.hidden=true;
- if(!file.type.startsWith("image/")||file.size>20971520){scannerMessage(state,"Vyber fotografii do 20 MB.");return}
+ releaseCamera(state);const job=++state.photoJob;
+ if((file.type&&!file.type.startsWith("image/")&&file.type!=="application/octet-stream")||file.size>20971520){scannerMessage(state,"Vyber fotografii do 20 MB.");return}
  scannerMessage(state,"Čtu EAN z fotografie…");let url;
- try{const library=await barcodeLibrary();if(scanner!==state)return;
-  url=URL.createObjectURL(file);const result=await new library.BrowserMultiFormatReader().decodeFromImageUrl(url);
-  if(!acceptBarcode(state,result.getText()))scannerMessage(state,"Na fotografii nebyl rozpoznán platný EAN. Vyfoť celý kód ostřeji nebo jej zadej ručně.");
- }catch{scannerMessage(state,"Kód se nepodařilo přečíst. Vyfoť celý čárový kód ostře při dobrém světle nebo EAN zadej ručně.")}
+ const current=()=>scanner===state&&job===state.photoJob;
+ try{
+  url=URL.createObjectURL(file);const image=new Image();
+  const loaded=new Promise((resolve,reject)=>{image.onload=resolve;image.onerror=reject;image.src=url});
+  const [library]=await Promise.all([barcodeLibrary(),loaded]);if(!current())return;
+  if(acceptBarcode(state,readBarcodePhoto(retailReader(library),image)))return;
+  scannerMessage(state,"Kód se nepodařilo přečíst. Vyfoť celý kód včetně světlých okrajů, bez odlesku, nebo zadej čísla pod kódem.");
+ }catch{if(current())scannerMessage(state,"Fotku se nepodařilo otevřít nebo načíst čtečku. Zkus novou fotku nebo zadej EAN ručně.")}
  finally{if(url)URL.revokeObjectURL(url)}
 }
-function photographEan(){const state=scannerPanel();if(state){state.video.hidden=true;scannerMessage(state,"Vyfoť celý čárový kód.");el("ean-photo").click()}}
-async function scanStreamWithLibrary(state){
- const library=await barcodeLibrary();if(scanner!==state||state.liveCancelled)return;
- const controls=await new library.BrowserMultiFormatReader().decodeFromStream(state.stream,state.video,result=>{if(result&&!state.liveCancelled)acceptBarcode(state,result.getText())});
- if(scanner!==state||state.liveCancelled)controls.stop();else state.controls=controls;
+async function cameraControls(state,track){
+ const caps=track.getCapabilities?.();if(!caps||!track.applyConstraints)return;
+ if(caps.focusMode?.includes("continuous"))await track.applyConstraints({advanced:[{focusMode:"continuous"}]}).catch(()=>{});
+ if(scanner!==state||state.liveCancelled||!(caps.torch===true||Array.isArray(caps.torch)&&caps.torch.includes(true)))return;
+ const light=state.light;light.hidden=false;
+ light.onclick=async()=>{
+  const on=light.getAttribute("aria-pressed")!=="true";light.disabled=true;
+  try{await track.applyConstraints({advanced:[{torch:on}]});if(!state.liveCancelled)light.setAttribute("aria-pressed",String(on))}
+  catch{scannerMessage(state,"Světlo se nepodařilo přepnout. Zkus lépe osvětlit celý kód.")}
+  finally{light.disabled=false}
+ };
 }
-function startScanner(){
+async function startScanner(){
  const state=scannerPanel();if(!state)return;state.liveCancelled=false;
- if(!navigator.mediaDevices?.getUserMedia){state.video.hidden=true;scannerMessage(state,"Živý náhled zde není dostupný. Tlačítko Vyfotit EAN otevře fotoaparát telefonu.");return}
+ if(!navigator.mediaDevices?.getUserMedia){scannerMessage(state,"Živý náhled zde není dostupný. Tlačítko Vyfotit EAN otevře fotoaparát telefonu.");return}
  // Request the rear camera directly in the user's click, before loading the decoder.
- let permission;try{permission=navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:"environment"}}})}catch(e){cameraError(state,e);return}
- Promise.resolve(permission).then(async stream=>{
+ const live=()=>scanner===state&&!state.liveCancelled;
+ try{
+  const stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:"environment"},width:{ideal:1280},height:{ideal:960},frameRate:{ideal:24}}});
   if(scanner!==state||state.liveCancelled||document.hidden){stream.getTracks().forEach(t=>t.stop());return}state.stream=stream;
-  try{
-   let detector;try{if(window.BarcodeDetector)detector=new window.BarcodeDetector({formats:["ean_13","ean_8","upc_a"]})}catch{}
-   if(!detector){await scanStreamWithLibrary(state);return}
-   state.video.srcObject=stream;await state.video.play();if(scanner!==state)return;
-   let busy=false;state.timer=setInterval(async()=>{
-    if(busy||scanner!==state||state.video.readyState<2)return;busy=true;
-    try{const codes=await detector.detect(state.video);if(state.liveCancelled)return;for(const code of codes){if(acceptBarcode(state,code.rawValue))break}}
-    catch{clearInterval(state.timer);try{await scanStreamWithLibrary(state)}catch(e){cameraError(state,e)}}finally{busy=false}
-   },350);
-  }catch(e){cameraError(state,e)}
- }).catch(e=>cameraError(state,e));
+  const video=state.video;video.srcObject=stream;state.preview.hidden=false;await video.play();if(!live())return;
+  const track=stream.getVideoTracks()[0];
+  if(track){cameraControls(state,track).catch(()=>{});track.addEventListener("ended",()=>{if(live())cameraError(state)}, {once:true})}
+  let detector;try{if(window.BarcodeDetector)detector=new window.BarcodeDetector({formats:["ean_13","ean_8","upc_a"]})}catch{}
+  const reader=await barcodeLibrary().then(retailReader).catch(()=>null);if(!live())return;
+  if(!reader&&!detector)throw Error("Čtečka se nenačetla.");
+  scannerMessage(state,"Dej celý kód vodorovně do rámečku. Pokud je rozmazaný, mírně oddal telefon a na chvíli ho podrž v klidu.");
+  const canvas=document.createElement("canvas");let busy=false,frame=0;
+  state.timer=setInterval(async()=>{
+   if(busy||!live()||video.readyState<2||!video.videoWidth||!video.videoHeight)return;
+   busy=true;
+   try{
+    const pass=frame++%4,region=pass===1||pass===3?fullBarcodeFrame:centerBarcodeFrame;
+    drawBarcodeFrame(canvas,video,video.videoWidth,video.videoHeight,region,1280,pass===3);
+    if(reader&&acceptBarcode(state,readBarcodeCanvas(reader,canvas)))return;
+    if(detector&&(!reader||pass===1)){
+     let results=[];try{results=await detector.detect(canvas)}catch{detector=null;if(!reader&&live())cameraError(state)}
+     if(live())for(const result of results){if(acceptBarcode(state,result.rawValue))break}
+    }
+   }catch(error){if(live())cameraError(state,error)}finally{busy=false}
+  },250);
+ }catch(error){if(live())cameraError(state,error)}
 }
 function cameraError(state,error){
- if(scanner!==state)return;releaseCamera(state);state.video.hidden=true;
+ if(scanner!==state)return;releaseCamera(state);
  scannerMessage(state,error?.name==="NotAllowedError"?"Přístup ke kameře byl zamítnut. Povol fotoaparát v nastavení tohoto webu, nebo použij Vyfotit EAN.":"Živý náhled kamery se nepodařilo otevřít. Použij Vyfotit EAN pro běžný fotoaparát telefonu.");
 }
-function pauseScanner(){if(scanner){releaseCamera(scanner);scanner.video.hidden=true;scannerMessage(scanner,"Náhled byl pozastaven. Použij Vyfotit EAN nebo spusť skenování znovu.")}}
+function pauseScanner(){if(scanner&&!scanner.liveCancelled){releaseCamera(scanner);scannerMessage(scanner,"Náhled byl pozastaven. Použij Vyfotit EAN nebo spusť skenování znovu.")}}
 // Native iPhone photo capture can background the page; preserve its file input.
 if(typeof window!=="undefined"&&window.addEventListener){window.addEventListener("pagehide",pauseScanner);document.addEventListener("visibilitychange",()=>{if(document.hidden)pauseScanner()})}
 
