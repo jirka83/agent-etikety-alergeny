@@ -152,6 +152,7 @@ function czechReferenceMatches(query){
    contains:["nuts","milk","soy"],containsDetail:"Lískové ořechy, mléko, sója (lecitiny)",possibleTraces:[],tracesText:"",
    sourceStatus:"czech_reference",sourceUrl:pack.sourceUrl,manufacturerUrl:nutellaManufacturer}));
 }
+function nutellaSearchWords(text){return searchWords(text).replace(/(\d+)\s+g\b/g,"$1g").split(" ")}
 function czechCatalogLinks(name=""){
  const term=encodeURIComponent(name);
  const rohlik=name?"https://www.rohlik.cz/hledat?q="+term+"&companyId=1":"https://www.rohlik.cz/";
@@ -186,12 +187,20 @@ function renderCatalogResults(query,states,target){
  const ongoing=Object.values(states).some(x=>x.state==="pending");
  const missing=Object.entries(states).filter(([,x])=>x.state==="failed").map(([k])=>({saved:"Uložené etikety",off:"Open Food Facts",usda:"USDA"}[k]));
  const referenceCodes=new Set(reference.rows.map(m=>canonicalGTIN(m.ean)));
- if(query.market!=="AT"&&!query.exact&&searchWords(query.term).split(" ").includes("nutella")){
+ const queryWords=nutellaSearchWords(query.term);
+ const nutellaByName=query.market!=="AT"&&!query.exact&&queryWords.includes("nutella");
+ if(nutellaByName){
   // For these codes, show only the Czech cards matching the requested variant or weight.
   nutellaCzechPacks.forEach(pack=>referenceCodes.add(canonicalGTIN(pack.ean)));
  }
- const offRows=off.rows.filter(m=>!referenceCodes.has(canonicalGTIN(m.ean)));
- const usdaRows=usda.rows.filter(m=>!referenceCodes.has(canonicalGTIN(m.ean)));
+ const relevantPublicMatch=m=>{
+  if(referenceCodes.has(canonicalGTIN(m.ean)))return false;
+  if(!nutellaByName)return true;
+  const words=nutellaSearchWords([m.name,m.brand,m.quantity].join(" "));
+  return queryWords.every(word=>words.includes(word)||/^\d+$/.test(word)&&words.includes(word+"g"));
+ };
+ const offRows=off.rows.filter(relevantPublicMatch);
+ const usdaRows=usda.rows.filter(relevantPublicMatch);
  found=[...reference.rows,...offRows,...usdaRows];
  const count=own.rows.length+found.length;
  const card=(m,i)=>'<article class="card"><h3>'+escapeHtml(m.name)+'</h3><p class="muted">'+escapeHtml([m.brand,m.quantity,"EAN "+m.ean].filter(Boolean).join(" · "))+'</p>'+
