@@ -66,7 +66,7 @@ function chrome(title,body,tab="search"){
 function home(){
  selected=null;found=[];photo=null;pendingSave=null;
  chrome("Automaticky najít etiketu",
- '<div class="card"><label>Název výrobku nebo EAN</label><div class="row"><input id="lookup" class="grow" placeholder="Zadej značku a název nebo čárový kód" autofocus><button id="find">Najít etiketu</button><button id="scan" class="secondary">Skenovat EAN</button><button id="photo-ean" class="secondary">Vyfotit EAN</button><button id="manual" class="secondary">Zadat ručně</button></div><div id="camera"></div><div class="row" style="margin-top:12px"><label for="lookup-market">Trh</label><select id="lookup-market" style="width:auto;max-width:100%"><option value="all">Všechny zdroje</option><option value="AT">Rakousko</option></select></div><p class="muted">Rakousko hledá v Open Food Facts podle země prodeje. Všechny zdroje zahrnují také vlastní etikety a USDA.</p></div>'+catalogHelp()+'<div id="results"></div><div id="editor"></div>');
+ '<div class="card"><label>Název výrobku nebo EAN</label><div class="row"><input id="lookup" class="grow" placeholder="Zadej značku a název nebo čárový kód" autofocus><button id="find">Najít etiketu</button><button id="scan" class="secondary">Skenovat EAN</button><button id="photo-ean" class="secondary">Vyfotit EAN</button><button id="manual" class="secondary">Zadat ručně</button></div><div id="camera"></div><div class="row" style="margin-top:12px"><label for="lookup-market">Trh</label><select id="lookup-market" style="width:auto;max-width:100%"><option value="all">Všechny zdroje</option><option value="CZ">Česká republika</option><option value="AT">Rakousko</option></select></div><p class="muted">Česká republika a Rakousko hledají v Open Food Facts podle země prodeje. Všechny zdroje zahrnují také vlastní etikety a USDA.</p></div>'+catalogHelp()+'<div id="results"></div><div id="editor"></div>');
  el("find").onclick=search;
  el("lookup").onkeydown=e=>{if(e.key==="Enter")search()};
  el("scan").onclick=startScanner;el("photo-ean").onclick=photographEan;
@@ -150,7 +150,7 @@ async function searchArchive(){
 }
 function renderCatalogResults(query,states,target){
  const {saved:own,off,usda}=states;
- const austria=query.market==="AT";
+ const marketName=query.market==="CZ"?"Česká republika":query.market==="AT"?"Rakousko":"";
  const ongoing=Object.values(states).some(x=>x.state==="pending");
  const missing=Object.entries(states).filter(([,x])=>x.state==="failed").map(([k])=>({saved:"Uložené etikety",off:"Open Food Facts",usda:"USDA"}[k]));
  found=[...off.rows,...usda.rows];
@@ -163,13 +163,15 @@ function renderCatalogResults(query,states,target){
   '<p><b>Možné stopy (neověřeno):</b> '+(m.possibleTraces.length?escapeHtml(m.possibleTraces.map(allergenName).join(", ")):m.tracesText?"Viz upozornění výrobce níže.":"Údaj nenalezen – neznamená bez stop")+'</p>'+
   (m.tracesText?'<p>'+escapeHtml(m.tracesText)+'</p>':'')+
   '<button type="button" data-choice="'+i+'">Vybrat neověřený návrh</button> '+catalogLink(m.sourceUrl,m.market?"Vyhledat EAN v USDA":"Karta Open Food Facts")+'</article>';
+ const czechFallback=query.market==="CZ"?'<p>'+catalogLink("https://www.ferpotravina.cz/databaze-potravin","Dohledat název nebo EAN v databázi FÉR potravina")+'</p>':'';
  target.innerHTML='<p role="status">'+(ongoing?(count?"Zatím nalezeno: "+count+". Ještě prohledávám další zdroje…":"Hledám v bezplatných katalozích…"):"Nalezené záznamy: "+count)+'</p>'+
   (missing.length?'<p class="alert">Nepodařilo se prohledat: '+escapeHtml(missing.join(", "))+'. Výsledky z dostupných zdrojů zůstávají zobrazené.</p>':'')+
   (own.rows.length?'<h3>Vaše uložené výrobky</h3>'+own.rows.map((r,i)=>'<div class="card"><b>'+escapeHtml(r.name)+'</b><p class="muted">'+escapeHtml([r.brand,r.variant,r.ean&&"EAN "+r.ean].filter(Boolean).join(" · "))+'</p><button type="button" data-own="'+i+'">Otevřít uloženou etiketu</button></div>').join(""):'')+
   (found.length?'<p class="muted">Výsledky jsou oddělené podle zdroje. Porovnej EAN, gramáž a složení se svým obalem.</p>':'')+
-  (off.rows.length?'<h3>'+(austria?'Rakousko · Open Food Facts':'Open Food Facts')+'</h3>'+off.rows.map(card).join(""):'')+
+  (off.rows.length?'<h3>'+(marketName?marketName+' · Open Food Facts':'Open Food Facts')+'</h3>'+off.rows.map(card).join(""):'')+
   (usda.rows.length?'<h3>USDA FoodData Central</h3>'+usda.rows.map((m,i)=>card(m,off.rows.length+i)).join(""):'')+
-  (!ongoing&&!count?'<p class="card">'+(missing.length?"V dostupných zdrojích se výrobek nenašel.":austria?"Pro tento dotaz nebyl v katalogu nalezen výrobek s uvedeným prodejem v Rakousku.":"Výrobek v prohledaných katalozích nenalezen.")+' Použij fotografii nebo ruční zadání. '+catalogLink("https://www.google.com/search?q="+encodeURIComponent(query.term+" výrobce etiketa složení alergeny"),"Dohledat etiketu výrobce")+'</p>':'');
+  (!ongoing&&!count?'<p class="card">'+(missing.length?"V dostupných zdrojích se výrobek nenašel.":marketName?"V katalogu se nenašel výrobek pro trh „"+marketName+"“.":"Výrobek v prohledaných katalozích nenalezen.")+' Použij fotografii nebo ruční zadání. '+catalogLink("https://www.google.com/search?q="+encodeURIComponent(query.term+" výrobce etiketa složení alergeny"),"Dohledat etiketu výrobce")+'</p>':'');
+ if(czechFallback)target.insertAdjacentHTML("beforeend",czechFallback);
  target.querySelectorAll("[data-choice]").forEach(b=>{const item=found[Number(b.dataset.choice)];b.onclick=()=>edit(item)});
  target.querySelectorAll("[data-own]").forEach(b=>{const item=own.rows[Number(b.dataset.own)];b.onclick=()=>detail(item.id)});
 }
@@ -181,7 +183,7 @@ async function lookupOpenFoodFacts(query){
    body:JSON.stringify({term:query.term,market:query.market}),
    signal:catalogTimeout(19000)
   });
-  if(!Array.isArray(result.matches)||query.market==="AT"&&result.market!=="AT"){
+  if(!Array.isArray(result.matches)||query.market&&result.market!==query.market){
    throw Error("Katalog nevrátil výsledky pro vybraný trh.");
   }
   return result.matches;
@@ -193,10 +195,10 @@ async function lookupOpenFoodFacts(query){
 async function search(){
  let query;try{query=catalogTerm(el("lookup").value)}catch(e){return fail(e)}
  const b=el("find"),target=el("results"),request=++catalogSearchId;
- const austria=el("lookup-market").value==="AT";
- if(austria)query.market="AT";
+ const market=el("lookup-market").value;
+ if(market==="CZ"||market==="AT")query.market=market;
  stopScanner();b.disabled=true;el("editor").innerHTML="";el("archive-results").textContent="";el("catalog-links").innerHTML=additionalCatalogLinks(query.term);
- const states=Object.fromEntries(["saved","off","usda"].map(k=>[k,{state:austria&&k!=="off"?"skipped":"pending",rows:[]}]));
+ const states=Object.fromEntries(["saved","off","usda"].map(k=>[k,{state:query.market&&k!=="off"?"skipped":"pending",rows:[]}]));
  const current=()=>target.isConnected&&request===catalogSearchId;
  const render=()=>{if(current())renderCatalogResults(query,states,target)};
  const run=async(k,fn)=>{try{states[k]={state:"done",rows:await fn()}}catch{states[k]={state:"failed",rows:[]}}render()};
@@ -204,7 +206,7 @@ async function search(){
  try{
   await validSession();if(!session)throw Error("Přihlas se znovu.");if(!current())return;
   const lookups=[run("off",()=>lookupOpenFoodFacts(query))];
-  if(!austria){
+  if(!query.market){
    lookups.push(run("saved",()=>lookupSaved(query)));
    lookups.push(run("usda",async()=>catalogMatches(await loadCatalog("usda"),query).map(r=>usdaMatch(r,query))));
   }
