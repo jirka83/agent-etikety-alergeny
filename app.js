@@ -66,35 +66,126 @@ function chrome(title,body,tab="search"){
 function home(){
  selected=null;found=[];photo=null;pendingSave=null;
  chrome("Automaticky najít etiketu",
- '<div class="card"><label>Název výrobku nebo EAN</label><div class="row"><input id="lookup" class="grow" placeholder="Zadej značku a název nebo čárový kód" autofocus><button id="find">Najít etiketu</button><button id="scan" class="secondary">Skenovat EAN</button><button id="photo-ean" class="secondary">Vyfotit EAN</button><button id="manual" class="secondary">Zadat ručně</button></div><div id="camera"></div><p class="muted">Agent použije bezplatný katalog Open Food Facts. Automatické vyhledávání probíhá až po stisknutí tlačítka. Zdroj Open Food Facts – ODbL.</p></div><div id="results"></div><div id="editor"></div>');
+ '<div class="card"><label>Název výrobku nebo EAN</label><div class="row"><input id="lookup" class="grow" placeholder="Zadej značku a název nebo čárový kód" autofocus><button id="find">Najít etiketu</button><button id="scan" class="secondary">Skenovat EAN</button><button id="photo-ean" class="secondary">Vyfotit EAN</button><button id="manual" class="secondary">Zadat ručně</button></div><div id="camera"></div><p class="muted">Jedním hledáním prohledáš uložené etikety, Open Food Facts (ODbL) a výběr USDA FoodData Central (CC0).</p></div>'+catalogHelp()+'<div id="results"></div><div id="editor"></div>');
  el("find").onclick=search;
  el("lookup").onkeydown=e=>{if(e.key==="Enter")search()};
  el("scan").onclick=startScanner;el("photo-ean").onclick=photographEan;
- el("manual").onclick=()=>edit(null);
+ el("manual").onclick=()=>edit(null);el("archive-search").onclick=searchArchive;
+}
+const catalogFiles={usda:"usda-2026-10.json",archive:"foodrepo-2018.json"};
+const catalogLoads=new Map();
+let catalogSearchId=0;
+const catalogTimeout=ms=>{if(typeof AbortSignal.timeout==="function")return AbortSignal.timeout(ms);const controller=new AbortController();setTimeout(()=>controller.abort(),ms);return controller.signal};
+const canonicalGTIN=code=>String(code).padStart(14,"0");
+const searchWords=text=>String(text||"").normalize("NFD").replace(/\p{M}/gu,"").toLowerCase().replace(/[^\p{L}\p{N}]+/gu," ").trim();
+function catalogTerm(input){
+ const text=String(input||"").trim().replace(/\s+/g," "),digits=text.replace(/\s/g,"");
+ if(text.length<3||text.length>100)throw Error("Zadej 3 až 100 znaků názvu nebo celý EAN.");
+ if(/^\d+$/.test(digits)){
+  if(!validEan(digits)||/^0+$/.test(digits))throw Error("Zkontroluj celý EAN včetně kontrolní číslice.");
+  return {term:digits,exact:true};
+ }
+ if(!searchWords(text))throw Error("Zadej název výrobku.");
+ return {term:text,exact:false};
+}
+function catalogMatches(rows,query,limit=6){
+ if(query.exact){const key=canonicalGTIN(query.term);return rows.filter(r=>canonicalGTIN(r[0])===key).slice(0,limit)}
+ const phrase=searchWords(query.term),tokens=phrase.split(" ");
+ return rows.map(r=>{const name=searchWords(r[1]),brand=searchWords(r[2]),combined=name+" "+brand;
+  if(!tokens.every(w=>combined.includes(w)))return null;
+  return {r,score:(name===phrase?8:0)+(brand===phrase?6:0)+(name.includes(phrase)?4:0)+(combined.includes(phrase)?2:0)};
+ }).filter(Boolean).sort((a,b)=>b.score-a.score||a.r[1].localeCompare(b.r[1],"cs")).slice(0,limit).map(x=>x.r);
+}
+async function loadCatalog(kind){
+ if(!catalogLoads.has(kind)){
+  const pending=fetch(new URL(catalogFiles[kind],location.href),{credentials:"omit",signal:catalogTimeout(12000)})
+   .then(async response=>{if(!response.ok)throw Error("Katalog není dostupný.");const data=await response.json();if(data.schema!==1||!Array.isArray(data.rows))throw Error("Katalog se nepodařilo načíst.");return data.rows})
+   .catch(e=>{catalogLoads.delete(kind);throw e});
+  catalogLoads.set(kind,pending);
+ }
+ return catalogLoads.get(kind);
+}
+function splitDeclaredTraces(text){
+ const match=/\bmay\s+(?:also\s+)?contain\b/i.exec(text);
+ return match?{ingredients:text.slice(0,match.index).trim(),tracesText:text.slice(match.index).trim()}:{ingredients:text,tracesText:""};
+}
+function usdaSearchUrl(term=""){
+ const u=new URL("https://fdc.nal.usda.gov/food-search/");u.searchParams.set("type","Branded");if(term)u.searchParams.set("query",term);return u.href;
+}
+function usdaMatch(r,query){
+ return {ean:query.exact?query.term:r[0],name:r[1],brand:r[2],quantity:r[3],...splitDeclaredTraces(r[4]),contains:[],possibleTraces:[],sourceStatus:"usda_unverified",sourceUrl:usdaSearchUrl(r[0]),fdcId:r[6],market:r[5]==="United States"?"USA":r[5]==="New Zealand"?"Nový Zéland":r[5],snapshot:"29. 10. 2026",updated:r[7]};
+}
+async function lookupSaved(query){
+ const p=new URLSearchParams({select:"id,name,brand,variant,ean",order:"name.asc",limit:"30"});
+ if(query.exact){
+  const plain=query.term.replace(/^0+/,"");const variants=[...new Set([query.term,...[8,12,13,14].filter(n=>n>=plain.length).map(n=>plain.padStart(n,"0"))])];
+  p.set("ean","in.("+variants.join(",")+")");
+ }else{
+  const words=query.term.replace(/[^\p{L}\p{N} ]/gu," ").trim().split(/\s+/).sort((a,b)=>b.length-a.length);
+  if(!words[0])return [];
+  const atom=words[0];p.set("or","(name.ilike.*"+atom+"*,brand.ilike.*"+atom+"*)");
+ }
+ const rows=await api("/rest/v1/products?"+p,{signal:catalogTimeout(10000)});
+ return rows.filter(r=>query.exact?Boolean(r.ean)&&canonicalGTIN(r.ean)===canonicalGTIN(query.term):searchWords(query.term).split(" ").every(w=>searchWords(r.name+" "+(r.brand||"")).includes(w))).slice(0,6);
+}
+function catalogLink(url,label){return '<a href="'+urlSafe(url)+'" target="_blank" rel="noopener noreferrer">'+escapeHtml(label)+'</a>'}
+function additionalCatalogLinks(term=""){
+ return '<ul><li>'+catalogLink(usdaSearchUrl(term),"Celý katalog USDA")+' – značkové výrobky hlavně z USA a Nového Zélandu.</li><li>'+catalogLink("https://www.ferpotravina.cz/databaze-potravin","FÉR potravina")+' – české etikety k ručnímu dohledání.</li><li>'+catalogLink("https://www.gs1cz.org/standardy-sluzby/nastroje/verified-by-gs1/","Verified by GS1")+' – ověření identity EAN, nikoli složení.</li>'+(term?'<li>'+catalogLink("https://www.google.com/search?q="+encodeURIComponent(term+" výrobce etiketa složení alergeny"),"Vyhledat etiketu výrobce")+' – ověř variantu a EAN přímo na dokumentu.</li>':'')+'</ul>';
+}
+function catalogHelp(){
+ return '<details class="card"><summary>Další bezplatné zdroje</summary><div id="catalog-links">'+additionalCatalogLinks()+'</div><p class="muted">FoodRepo – švýcarský archiv z roku 2018. Historické složení je pouze k porovnání; z archivu se etiketa nepředvyplňuje.</p><button type="button" id="archive-search" class="secondary">Prohledat archiv FoodRepo</button><div id="archive-results" aria-live="polite"></div></details>';
+}
+async function searchArchive(){
+ const b=el("archive-search"),target=el("archive-results"),request=catalogSearchId;let query;
+ try{query=catalogTerm(el("lookup").value)}catch(e){target.textContent=e.message;return}
+ b.disabled=true;target.textContent="Hledám v historickém archivu…";
+ try{const rows=catalogMatches(await loadCatalog("archive"),query);if(!target.isConnected||request!==catalogSearchId)return;
+  target.innerHTML=rows.length?'<p><b>FoodRepo – historické údaje z 8. 1. 2018</b> · '+catalogLink("https://github.com/digitalepidemiologylab/foodrepo_api","Zdroj, CC BY 4.0")+'</p>'+rows.map(r=>'<article class="card"><h3>'+escapeHtml(r[1])+'</h3><p class="muted">EAN '+escapeHtml(r[0])+' · '+escapeHtml(r[3])+'</p><p>'+escapeHtml(r[4])+'</p></article>').join(""):'<p>V archivu pro tento dotaz není nalezena čitelná etiketa.</p>';
+ }catch{if(target.isConnected&&request===catalogSearchId)target.textContent="Archiv se nepodařilo načíst. Zkus to znovu."}finally{b.disabled=false}
+}
+function renderCatalogResults(query,states,target){
+ const {saved:own,off,usda}=states;
+ const ongoing=Object.values(states).some(x=>x.state==="pending");
+ const missing=Object.entries(states).filter(([,x])=>x.state==="failed").map(([k])=>({saved:"Uložené etikety",off:"Open Food Facts",usda:"USDA"}[k]));
+ found=[...off.rows,...usda.rows];
+ const count=own.rows.length+found.length;
+ const card=(m,i)=>'<article class="card"><h3>'+escapeHtml(m.name)+'</h3><p class="muted">'+escapeHtml([m.brand,m.quantity,"EAN "+m.ean].filter(Boolean).join(" · "))+'</p>'+
+  (m.market?'<p class="muted">Trh: '+escapeHtml(m.market)+' · export USDA '+escapeHtml(m.snapshot)+(m.updated?' · změna záznamu '+escapeHtml(m.updated):'')+' · FDC '+escapeHtml(m.fdcId)+'</p>':'')+
+  (m.labelImageUrl&&urlSafe(m.labelImageUrl)?'<a href="'+urlSafe(m.labelImageUrl)+'" target="_blank" rel="noopener noreferrer"><img loading="lazy" src="'+urlSafe(m.labelImageUrl)+'" alt="Fotografie složení" style="width:100%;max-height:220px;object-fit:contain"></a>':'')+
+  (m.ingredients?'<details><summary>Zobrazit složení</summary><p>'+escapeHtml(m.ingredients)+'</p></details>':'')+
+  '<p><b>Obsahuje (neověřeno):</b> '+(m.contains.length?escapeHtml(m.contains.map(allergenName).join(", ")):"Samostatný seznam není k dispozici. Zkontroluj složení.")+'</p>'+
+  '<p><b>Možné stopy (neověřeno):</b> '+(m.possibleTraces.length?escapeHtml(m.possibleTraces.map(allergenName).join(", ")):m.tracesText?"Viz upozornění výrobce níže.":"Údaj nenalezen – neznamená bez stop")+'</p>'+
+  (m.tracesText?'<p>'+escapeHtml(m.tracesText)+'</p>':'')+
+  '<button type="button" data-choice="'+i+'">Vybrat neověřený návrh</button> '+catalogLink(m.sourceUrl,m.market?"Vyhledat EAN v USDA":"Karta Open Food Facts")+'</article>';
+ target.innerHTML='<p role="status">'+(ongoing?(count?"Zatím nalezeno: "+count+". Ještě prohledávám další zdroje…":"Hledám v bezplatných katalozích…"):"Nalezené záznamy: "+count)+'</p>'+
+  (missing.length?'<p class="alert">Nepodařilo se prohledat: '+escapeHtml(missing.join(", "))+'. Výsledky z dostupných zdrojů zůstávají zobrazené.</p>':'')+
+  (own.rows.length?'<h3>Vaše uložené výrobky</h3>'+own.rows.map((r,i)=>'<div class="card"><b>'+escapeHtml(r.name)+'</b><p class="muted">'+escapeHtml([r.brand,r.variant,r.ean&&"EAN "+r.ean].filter(Boolean).join(" · "))+'</p><button type="button" data-own="'+i+'">Otevřít uloženou etiketu</button></div>').join(""):'')+
+  (found.length?'<p class="muted">Výsledky jsou oddělené podle zdroje. Porovnej EAN, gramáž a složení se svým obalem.</p>':'')+
+  (off.rows.length?'<h3>Open Food Facts</h3>'+off.rows.map(card).join(""):'')+
+  (usda.rows.length?'<h3>USDA FoodData Central</h3>'+usda.rows.map((m,i)=>card(m,off.rows.length+i)).join(""):'')+
+  (!ongoing&&!count?'<p class="card">'+(missing.length?"V dostupných zdrojích se výrobek nenašel.":"Výrobek v prohledaných katalozích nenalezen.")+' Použij fotografii nebo ruční zadání. '+catalogLink("https://www.google.com/search?q="+encodeURIComponent(query.term+" výrobce etiketa složení alergeny"),"Dohledat etiketu výrobce")+'</p>':'');
+ target.querySelectorAll("[data-choice]").forEach(b=>{const item=found[Number(b.dataset.choice)];b.onclick=()=>edit(item)});
+ target.querySelectorAll("[data-own]").forEach(b=>{const item=own.rows[Number(b.dataset.own)];b.onclick=()=>detail(item.id)});
 }
 async function search(){
- const term=el("lookup").value.trim(),b=el("find");
- if(term.length<3)return msg("Zadej alespoň 3 znaky nebo celý EAN.",true);
- b.disabled=true;el("results").innerHTML='<div class="card">Hledám výrobky, složení a případné fotografie etiket…</div>';el("editor").innerHTML="";
+ let query;try{query=catalogTerm(el("lookup").value)}catch(e){return fail(e)}
+ const b=el("find"),target=el("results"),request=++catalogSearchId;
+ stopScanner();b.disabled=true;el("editor").innerHTML="";el("archive-results").textContent="";el("catalog-links").innerHTML=additionalCatalogLinks(query.term);
+ const states=Object.fromEntries(["saved","off","usda"].map(k=>[k,{state:"pending",rows:[]}]));
+ const current=()=>target.isConnected&&request===catalogSearchId;
+ const render=()=>{if(current())renderCatalogResults(query,states,target)};
+ const run=async(k,fn)=>{try{states[k]={state:"done",rows:await fn()}}catch{states[k]={state:"failed",rows:[]}}render()};
+ render();
  try{
-  await validSession();
-  const res=await fetch(API+"/functions/v1/etikety-lookup",{
-   method:"POST",headers:{"Content-Type":"application/json","apikey":KEY,"Authorization":"Bearer "+session.access_token},body:JSON.stringify({term})
-  });
-  const j=await res.json();if(!res.ok)throw Error(j.error||"Vyhledávání se nepodařilo.");
-  found=j.matches||[];
-  el("results").innerHTML='<h2>Nalezené varianty ('+found.length+')</h2>'+
-  (found.length?'<p class="alert">Vyber přesný produkt podle názvu, příchutě, balení a EAN. Údaje jsou neověřené.</p>':'<div class="card">Výrobek v komunitním katalogu nenalezen. Použij ruční zadání či fotografii, případně <a target="_blank" rel="noopener noreferrer" href="https://www.google.com/search?q='+encodeURIComponent(term+" etiketa složení alergeny výrobce pdf")+'">vyhledej dokument výrobce na webu</a> a ověř jej.</div>')+
-  found.map((m,i)=>'<div class="card"><h3>'+escapeHtml(m.name)+'</h3><p class="muted">'+escapeHtml([m.brand,m.quantity,"EAN "+m.ean].filter(Boolean).join(" · "))+'</p>'+
-  (m.labelImageUrl?'<a href="'+urlSafe(m.labelImageUrl)+'" target="_blank" rel="noopener noreferrer"><img loading="lazy" src="'+urlSafe(m.labelImageUrl)+'" alt="Fotografie složení" style="width:100%;max-height:220px;object-fit:contain"></a>':'<div class="alert">Fotografie složení nenalezena – nahraj vlastní etiketu.</div>')+
-  '<p><b>Obsahuje (neověřeno):</b> '+(m.contains.length?escapeHtml(m.contains.map(allergenName).join(", ")):"Údaj nenalezen")+'</p>'+
-  '<p><b>Možné stopy (neověřeno):</b> '+(m.possibleTraces.length?escapeHtml(m.possibleTraces.map(allergenName).join(", ")):"Údaj nenalezen – neznamená bez stop")+'</p>'+
-  (m.tracesText?'<p>Upozornění: '+escapeHtml(m.tracesText)+'</p>':"")+
-  '<button data-choice="'+i+'">Vybrat neověřený návrh</button> <a href="'+urlSafe(m.sourceUrl)+'" rel="noopener noreferrer" target="_blank">Zdroj</a></div>').join("");
-  document.querySelectorAll("[data-choice]").forEach(b=>b.onclick=()=>edit(found[Number(b.dataset.choice)]));
- }catch(e){el("results").innerHTML='<div class="alert error">'+escapeHtml(e.message)+' — můžeš údaje zadat ručně.</div>'}
- finally{b.disabled=false}
+  await validSession();if(!session)throw Error("Přihlas se znovu.");if(!current())return;
+  await Promise.all([
+   run("saved",()=>lookupSaved(query)),
+   run("off",async()=>{try{const j=await api("/functions/v1/etikety-lookup",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({term:query.term}),signal:catalogTimeout(19000)});if(!Array.isArray(j.matches))throw Error("Katalog nevrátil výsledky.");return j.matches}catch(e){if(query.exact&&e.status===502&&e.message==="Katalog je nedostupný: 404")return [];throw e}}),
+   run("usda",async()=>catalogMatches(await loadCatalog("usda"),query).map(r=>usdaMatch(r,query)))
+  ]);
+ }catch(e){if(current())target.textContent=e.message}finally{if(current())b.disabled=false}
 }
+
 function edit(m){
  selected=m||{ean:"",name:el("lookup").value.trim(),brand:"",quantity:"",ingredients:"",contains:[],possibleTraces:[],tracesText:"",sourceUrl:"",sourceStatus:"manual_unverified"};
  photo=null;pendingSave=null;
