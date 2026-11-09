@@ -280,7 +280,7 @@ function edit(m){
  '<div class="alert">Návrh není ověřený. Před uložením zkontroluj přesný produkt, všechny alergeny a možná upozornění „může obsahovat“.</div>'+
  '<p>Do seznamu se výrobek přidá po potvrzení kontroly a uložení.</p><button id="go-save" type="button" class="secondary">Přejít k uložení</button>'+
  '<div class="grid"><div><label>Název *</label><input id="name" value="'+escapeHtml(selected.name)+'"></div><div><label>EAN</label><input id="ean" value="'+escapeHtml(selected.ean)+'" inputmode="numeric"></div><div><label>Značka</label><input id="brand" value="'+escapeHtml(selected.brand)+'"></div><div><label>Varianta / gramáž</label><input id="qty" value="'+escapeHtml(selected.quantity)+'"></div></div>'+
- '<label>Fotografie tvého balení (pro ověření)</label><input id="photo" type="file" accept="image/jpeg,image/png,image/webp" capture="environment"><button id="ocr" type="button" class="secondary">Přečíst fotografii (OCR)</button><p id="ocrmsg" class="muted">OCR funguje lokálně a je pouze návrhem.</p>'+
+ labelOcrMarkup()+
  '<label>Složení (zkontroluj celý text)</label><textarea id="ingredients">'+escapeHtml(selected.ingredients)+'</textarea>'+
  '<label>Možné stopy – přesný text z obalu</label><textarea id="traces">'+escapeHtml(selected.tracesText)+'</textarea>'+
  '<label>Zdroj</label><input id="source" type="url" value="'+escapeHtml(selected.sourceUrl)+'" placeholder="https://…">'+
@@ -291,8 +291,7 @@ function edit(m){
  el("editor").innerHTML=body;document.querySelectorAll("[data-code]").forEach(s=>{if(selected.contains.includes(s.dataset.code)&&selected.possibleTraces.includes(s.dataset.code))s.value="both"});
  el("editor").scrollIntoView({behavior:"smooth",block:"start"});
  el("go-save").onclick=()=>{el("save-confirmation").scrollIntoView({behavior:"smooth",block:"center"});el("confirmed").focus({preventScroll:true})};
- el("photo").onchange=e=>photo=e.target.files?.[0]||null;
- el("ocr").onclick=runOcr;
+ bindLabelOcr({ingredients:el("ingredients"),traces:el("traces"),confirmed:el("confirmed")},file=>{photo=file;el("confirmed").checked=false});
  el("suggest").onclick=suggest;
  el("save").onclick=save;
 }
@@ -313,16 +312,6 @@ function suggest(){
  document.querySelectorAll("[data-code]").forEach(s=>s.value=states[s.dataset.code]);
  msg("Návrh oddělil složení a možné stopy. Porovnej jej s etiketou; rozpoznání slov nemusí být úplné.");
 }
-async function runOcr(){
- if(!photo)return msg("Nejdřív nahraj fotku svého balení.",true);
- el("ocr").disabled=true;el("ocrmsg").textContent="Načítá se lokální OCR (bez placené AI)…";
- try{
-  if(!window.Tesseract){await new Promise((ok,no)=>{const s=document.createElement("script");s.src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js";s.onload=ok;s.onerror=no;document.head.appendChild(s)})}
-  const target=el("ingredients"),image=photo;const r=await Tesseract.recognize(image,"ces+eng");if(!target.isConnected||photo!==image)return;target.value=r.data.text;
-  el("ocrmsg").textContent="Text vložen. Porovnej jej s fotografií; možné stopy zkontroluj zvlášť.";
- }catch(e){if(el("ocrmsg"))el("ocrmsg").textContent="OCR se nepodařilo; údaje opiš ručně."}finally{if(el("ocr"))el("ocr").disabled=false}
-}
-
 function validEan(ean){
  if(!ean)return true;if(!/^(?:[0-9]{8}|[0-9]{12}|[0-9]{13}|[0-9]{14})$/.test(ean))return false;
  const digits=[...ean].map(Number),check=digits.pop();let sum=0;
